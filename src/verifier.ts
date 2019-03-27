@@ -1,4 +1,4 @@
-#!/usr/bin/env node -r ts-node/register
+#!/usr/bin/env ts-node
 
 import * as program from 'caporal';
 import * as fs from 'fs';
