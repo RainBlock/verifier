@@ -25,7 +25,7 @@
   "dependencies": {
     "@rainblock/ethereum-block": "^2.0.0",
     "@rainblock/merkle-patricia-tree": "^4.2.0",
-    "@rainblock/protocol": "^1.0.3",
+    "@rainblock/protocol": "^1.0.4",
     "@types/js-yaml": "^3.12.0",
     "@types/node": "^11.11.4",
     "benchmark": "^2.1.4",

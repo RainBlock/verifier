@@ -79,7 +79,7 @@ program.command('test-transaction', 'Send a test transaction')
         const request = new TransactionRequest();
         const data = await fs.promises.readFile(o['txdata']);
         request.setTransaction(data);
-        client.submitTransaction(request, (err, reply: TransactionReply) => {
+        client.submitTransaction(request, (err: any, reply: TransactionReply) => {
             if (err) {
                 console.error(err);
             } else {

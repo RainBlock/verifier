@@ -30,6 +30,6 @@ USER verifier
 
 # Install the verifier from source
 RUN cd verifier-source;npm install -g;npm i -g ts-node typescript
-
+WORKDIR /verifier-source
 
 EXPOSE 9000
