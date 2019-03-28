@@ -12,7 +12,6 @@ import { VerifierService, VerifierClient, TransactionRequest, TransactionReply, 
 import { BlockGenerator } from './blockGenerator';
 import { ConfigurationFile } from './configFile';
 
-
 program.version('1').description('The rainblock verifier server')
     .command('serve', 'Start the verifier server')
     .option('--port <port-number>', 'Serve on <port-number>.', program.INTEGER, 9000)
@@ -66,6 +65,7 @@ program.command('test-storage', 'Start up a test storage node')
             server.addService(VerifierStorageService, new DummyStorageServer(l));
             server.bind(nodeAddress, grpc.ServerCredentials.createInsecure());
             server.start();
+
             console.log(`Shard ${i} started on port ${o[`shard${i}`]}`);
         }
     });

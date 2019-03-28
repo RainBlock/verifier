@@ -2,12 +2,13 @@ import { EthereumHeader, decodeBlock, EthereumTransaction } from '@rainblock/eth
 import { ConfigurationFile } from './configFile';
 import { encodeBlock } from '@rainblock/ethereum-block'
 import { RlpList, RlpEncode, RlpDecode } from 'rlp-stream/build/src/rlp-stream';
-import { VerifierStorageClient, UpdateMsg, grpc, UpdateOp, StorageUpdate, ValueChangeOp, ExecutionOp, CreationOp, DeletionOp } from '@rainblock/protocol'
-import { MerklePatriciaTree, CachedMerklePatriciaTree, MerklePatriciaTreeOptions } from '@rainblock/merkle-patricia-tree';
+import { EthereumAccount, EthereumAccountFromBuffer } from './ethereumAccount';
+import { VerifierStorageClient, UpdateMsg, grpc, UpdateOp, StorageUpdate, ValueChangeOp, ExecutionOp, CreationOp, DeletionOp, MerklePatriciaTreeNode as ProtocolMerklePatriciaTree} from '@rainblock/protocol'
+import { MerklePatriciaTree, CachedMerklePatriciaTree, MerklePatriciaTreeOptions, MerklePatriciaTreeNode } from '@rainblock/merkle-patricia-tree';
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { hashAsBigInt, HashType } from 'bigint-hash';
+import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE } from 'bigint-buffer';
 
 export interface BlockGeneratorOptions {
@@ -30,7 +31,7 @@ export interface TransactionData {
     /** Binary transaction */
     txBinary : Buffer;
     /** "bag of Proofs" submitted with transaction, keyed by node hash */
-    proofs: Map<bigint, Buffer>;
+    proofs: Map<bigint, MerklePatriciaTreeNode<Buffer>>;
     /** The write set */
     writeSet : Map<bigint, AccountUpdates>;
 }
@@ -63,7 +64,7 @@ export class BlockGenerator {
     private difficulty: bigint;
     private gasLimit : bigint;
     private beneficiary : bigint;
-    private tree : MerklePatriciaTree<Buffer, Buffer>;
+    private tree : CachedMerklePatriciaTree<Buffer, Buffer>;
     private verifiers : VerifierStorageClient[];
 
     private txQueue = new Map<bigint, TransactionData>();
@@ -113,19 +114,60 @@ export class BlockGenerator {
     async orderAndExecuteTransactions(transactions : Map<bigint, TransactionData>) : Promise<ExecutionResult> {
         const order : TransactionData[] = [];
 
-        for (const tx of transactions.values()) {
-            // TODO: execute tx using partial merkle tree
-            // For now, this will just involve setting the tx funds
-            const op = new ValueChangeOp();
-            // We don't currently have a way to retrieve the value, so 
-            // we just set the current value.
-            op.setValue(toBufferBE(tx.tx.value, 32));
-            op.setChanges(0); // Incrementing value of destination doesn't change anything
-            tx.writeSet.set(tx.tx.from, {
-                op
-                // And no storage changes
-            })
+        for (const [txHash, tx] of transactions.entries()) {
+            this.logger.debug(`Processing tx ${txHash.toString(16)}`);
+
+            try {
+                // First, verify that the FROM account can be found and the
+                // nonce in the transaction is one greater than the account
+                // nonce.
+                const fromAccountBinary = 
+                    this.tree.getFromCache(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 32)), tx.proofs);
+                if (fromAccountBinary === null) {
+                    throw new Error(`From account ${tx.tx.from.toString(16)} does not exist!`);
+                } 
+                const fromAccount = EthereumAccountFromBuffer(fromAccountBinary);
+                if (fromAccount.nonce +1n !== tx.tx.nonce) {
+                    throw new Error(`From account ${tx.tx.from.toString(16)} had incorrect nonce ${fromAccount.nonce}, expected ${tx.tx.nonce - 1n}`);
+                }
+
+
+                const toAccountBinary = 
+                this.tree.getFromCache(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 32)), tx.proofs);
+                if (toAccountBinary === null) {
+                    throw new Error(`To account ${tx.tx.to} does not exist!`);
+                } 
+
+                const toAccount = EthereumAccountFromBuffer(toAccountBinary);
+                if (toAccount.hasCode()) {
+                    // TODO: execute code
+                    this.logger.warn(`To account ${tx.tx.to.toString(16)} Code execution not yet implemented`);
+                } else {
+                    // Simple transfer
+                    this.logger.debug(`tx ${txHash.toString(16)} transfer ${tx.tx.value.toString(16)} wei from ${tx.tx.from.toString(16)} -> ${tx.tx.to.toString(16)}`);
+                    
+                    // TODO : accumulate at -end- to avoid repeats
+                    // Need our own non-proto format.
+                    const fromOp = new ValueChangeOp();
+                    fromOp.setValue(toBufferBE(0n - tx.tx.value, 32));
+                    fromOp.setChanges(1);
+                    tx.writeSet.set(tx.tx.from, {
+                        op: fromOp
+                        // And no storage changes
+                    })
+
+                    const toOp = new ValueChangeOp();
+                    toOp.setValue(toBufferBE(fromAccount.balance + tx.tx.value, 32));
+                    toOp.setChanges(0); //0, because destination changes don't increment nonce
+                    tx.writeSet.set(tx.tx.to, {
+                        op: toOp
+                        // And no storage changes
+                    })
+                }
             order.push(tx);
+            } catch (e) {
+                this.logger.debug(`Skipping tx ${txHash.toString(16)} due to ${e}`);
+            }
         }
         
         return {
@@ -219,7 +261,7 @@ export class BlockGenerator {
             this.logger.info(`Assembling new block ${this.blockNumber.toString()} with ${blockTransactions.size} txes`);
 
             // Decide on which transactions will be included in the block, order and execute them.
-            const executionResult = await this.orderAndExecuteTransactions(this.txQueue);
+            const executionResult = await this.orderAndExecuteTransactions(blockTransactions);
 
             // Calculate the transactionsRoot
             const transactionsRoot = await this.calculateTransactionsRoot(executionResult.order);
