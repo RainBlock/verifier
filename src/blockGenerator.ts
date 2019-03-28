@@ -148,8 +148,12 @@ export class BlockGenerator {
                     
                     // TODO : accumulate at -end- to avoid repeats
                     // Need our own non-proto format.
+                    fromAccount.nonce += 1n;
+                    fromAccount.balance -= tx.tx.value;
+                    toAccount.balance += tx.tx.value;
+                    
                     const fromOp = new ValueChangeOp();
-                    fromOp.setValue(toBufferBE(0n - tx.tx.value, 32));
+                    fromOp.setValue(toBufferBE(toAccount.balance - tx.tx.value, 32));
                     fromOp.setChanges(1);
                     tx.writeSet.set(tx.tx.from, {
                         op: fromOp
@@ -165,9 +169,6 @@ export class BlockGenerator {
                     })
 
                     // And update the tree
-                    fromAccount.nonce += 1n;
-                    fromAccount.balance -= tx.tx.value;
-                    toAccount.balance += tx.tx.value;
                     this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 32)), fromAccount.toRlp());
                     this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.to, 32)), toAccount.toRlp());
                 }
