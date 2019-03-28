@@ -163,6 +163,13 @@ export class BlockGenerator {
                         op: toOp
                         // And no storage changes
                     })
+
+                    // And update the tree
+                    fromAccount.nonce += 1n;
+                    fromAccount.balance -= tx.tx.value;
+                    toAccount.balance += tx.tx.value;
+                    this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 32)), fromAccount.toRlp());
+                    this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.to, 32)), toAccount.toRlp());
                 }
             order.push(tx);
             } catch (e) {
