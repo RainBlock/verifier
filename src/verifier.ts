@@ -11,6 +11,10 @@ import { DummyStorageServer } from './dummyStorageService';
 import { VerifierService, VerifierClient, TransactionRequest, TransactionReply, VerifierStorageService, grpc } from '@rainblock/protocol'
 import { BlockGenerator } from './blockGenerator';
 import { ConfigurationFile } from './configFile';
+import { RlpDecode, RlpList } from 'rlp-stream/build/src/rlp-stream';
+import { decodeBlock } from '@rainblock/ethereum-block/dist/ethereum-block';
+import { GethStateDump } from './gethImport';
+import { EthereumAccount } from './ethereumAccount';
 
 program.version('1').description('The rainblock verifier server')
     .command('serve', 'Start the verifier server')

@@ -4,8 +4,12 @@ export interface ConfigurationFile {
     rpc: RpcSettings
     /** Hex string indicating account number of beneficiary */
     beneficiary: string;
+    /** Block reward size, in wei */
+    blockReward: number;
     /** Path to the genesis block file, relative to the config file */
     genesisBlock: string;
+    /** Path to the genesis data file, exported by `geth dump`, relative to the config file */
+    genesisData : string;
 }
 
 /** RPC settings */

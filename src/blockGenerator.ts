@@ -1,15 +1,16 @@
-import { EthereumHeader, decodeBlock, EthereumTransaction } from '@rainblock/ethereum-block'
+import { EthereumHeader, decodeBlock, EthereumTransaction, CONTRACT_CREATION } from '@rainblock/ethereum-block'
 import { ConfigurationFile } from './configFile';
 import { encodeBlock } from '@rainblock/ethereum-block'
 import { RlpList, RlpEncode, RlpDecode } from 'rlp-stream/build/src/rlp-stream';
 import { EthereumAccount, EthereumAccountFromBuffer } from './ethereumAccount';
 import { VerifierStorageClient, UpdateMsg, grpc, UpdateOp, StorageUpdate, ValueChangeOp, ExecutionOp, CreationOp, DeletionOp, MerklePatriciaTreeNode as ProtocolMerklePatriciaTree} from '@rainblock/protocol'
 import { MerklePatriciaTree, CachedMerklePatriciaTree, MerklePatriciaTreeOptions, MerklePatriciaTreeNode } from '@rainblock/merkle-patricia-tree';
+import { GethStateDump } from './gethImport';
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
-import { toBufferBE } from 'bigint-buffer';
+import { toBufferBE, toBigIntBE } from 'bigint-buffer';
 
 export interface BlockGeneratorOptions {
     /** The maximum amount of time the proof of work puzzle takes to solve */
@@ -113,6 +114,7 @@ export class BlockGenerator {
     /** Order and execute the given transaction map. */
     async orderAndExecuteTransactions(transactions : Map<bigint, TransactionData>) : Promise<ExecutionResult> {
         const order : TransactionData[] = [];
+        let gasUsed = 0n;
 
         for (const [txHash, tx] of transactions.entries()) {
             this.logger.debug(`Processing tx ${txHash.toString(16)}`);
@@ -122,65 +124,90 @@ export class BlockGenerator {
                 // nonce in the transaction is one greater than the account
                 // nonce.
                 const fromAccountBinary = 
-                    this.tree.getFromCache(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 32)), tx.proofs);
+                    this.tree.getFromCache(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 20)), tx.proofs);
                 if (fromAccountBinary === null) {
                     throw new Error(`From account ${tx.tx.from.toString(16)} does not exist!`);
                 } 
                 const fromAccount = EthereumAccountFromBuffer(fromAccountBinary);
-                if (fromAccount.nonce +1n !== tx.tx.nonce) {
-                    throw new Error(`From account ${tx.tx.from.toString(16)} had incorrect nonce ${fromAccount.nonce}, expected ${tx.tx.nonce - 1n}`);
+                if (fromAccount.nonce !== tx.tx.nonce) {
+                    throw new Error(`From account ${tx.tx.from.toString(16)} had incorrect nonce ${fromAccount.nonce}, expected ${tx.tx.nonce}`);
                 }
 
+                // TODO: handle code creation (tx.to == CONTRACT_CREATION)
+                if (tx.tx.to === CONTRACT_CREATION) {
+                    throw new Error(`tx ${txHash.toString(16)} CONTRACT_CREATION, but CONTRACT_CREATION not yet supported`);
+                }
 
                 const toAccountBinary = 
-                this.tree.getFromCache(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 32)), tx.proofs);
+                this.tree.getFromCache(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 20)), tx.proofs);
+
                 if (toAccountBinary === null) {
-                    throw new Error(`To account ${tx.tx.to} does not exist!`);
-                } 
-
-                const toAccount = EthereumAccountFromBuffer(toAccountBinary);
-                if (toAccount.hasCode()) {
-                    // TODO: execute code
-                    this.logger.warn(`To account ${tx.tx.to.toString(16)} Code execution not yet implemented`);
-                } else {
-                    // Simple transfer
-                    this.logger.debug(`tx ${txHash.toString(16)} transfer ${tx.tx.value.toString(16)} wei from ${tx.tx.from.toString(16)} -> ${tx.tx.to.toString(16)}`);
-                    
-                    // TODO : accumulate at -end- to avoid repeats
-                    // Need our own non-proto format.
-                    fromAccount.nonce += 1n;
-                    fromAccount.balance -= tx.tx.value;
-                    toAccount.balance += tx.tx.value;
-                    
-                    const fromOp = new ValueChangeOp();
-                    fromOp.setValue(toBufferBE(toAccount.balance - tx.tx.value, 32));
-                    fromOp.setChanges(1);
-                    tx.writeSet.set(tx.tx.from, {
-                        op: fromOp
-                        // And no storage changes
-                    })
-
-                    const toOp = new ValueChangeOp();
-                    toOp.setValue(toBufferBE(fromAccount.balance + tx.tx.value, 32));
-                    toOp.setChanges(0); //0, because destination changes don't increment nonce
+                    // This means we're going to CREATE this account.
+                    this.logger.debug(`tx ${txHash.toString(16)} create new account ${tx.tx.to.toString(16)}`);
+                    const createOp = new CreationOp();
+                    createOp.setAccount(toBufferBE(tx.tx.to, 20));
+                    createOp.setValue(toBufferBE(tx.tx.value, 32));
                     tx.writeSet.set(tx.tx.to, {
-                        op: toOp
-                        // And no storage changes
-                    })
+                        op: createOp
+                    });
+                    // Update the tree
+                    const newAccount = new EthereumAccount(0n, tx.tx.value, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
+                    this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.to, 20)), newAccount.toRlp());
+                } else {
+                    const toAccount = EthereumAccountFromBuffer(toAccountBinary);
+                    if (toAccount.hasCode()) {
+                        // TODO: execute code
+                        this.logger.warn(`To account ${tx.tx.to.toString(16)} Code execution not yet implemented`);
+                    } else {
+                        // Simple transfer
+                        this.logger.debug(`tx ${txHash.toString(16)} transfer ${tx.tx.value.toString(16)} wei from ${tx.tx.from.toString(16)} -> ${tx.tx.to.toString(16)}`);
+                        
+                        // TODO : accumulate at -end- to avoid repeats
+                        // Need our own non-proto format.
+                        fromAccount.nonce += 1n;
+                        fromAccount.balance -= tx.tx.value;
+                        toAccount.balance += tx.tx.value;
+                        
+                        const fromOp = new ValueChangeOp();
+                        fromOp.setValue(toBufferBE(toAccount.balance - tx.tx.value, 32));
+                        fromOp.setChanges(1);
+                        tx.writeSet.set(tx.tx.from, {
+                            op: fromOp
+                            // And no storage changes
+                        })
 
-                    // And update the tree
-                    this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 32)), fromAccount.toRlp());
-                    this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.to, 32)), toAccount.toRlp());
+                        const toOp = new ValueChangeOp();
+                        toOp.setValue(toBufferBE(fromAccount.balance + tx.tx.value, 32));
+                        toOp.setChanges(0); //0, because destination changes don't increment nonce
+                        tx.writeSet.set(tx.tx.to, {
+                            op: toOp
+                            // And no storage changes
+                        })
+
+                        // And update the tree
+                        this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 20)), fromAccount.toRlp());
+                        this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.to, 20)), toAccount.toRlp());
+                    }
                 }
             order.push(tx);
             } catch (e) {
-                this.logger.debug(`Skipping tx ${txHash.toString(16)} due to ${e}`);
+                if (e instanceof Error) {
+                    this.logger.debug(`Skipping tx ${txHash.toString(16)} due to error:`);
+                    this.logger.debug(e.stack!);
+                } else {
+                    this.logger.debug(`Skipping tx ${txHash.toString(16)} due to ${e}`);
+                }
             }
         }
         
+        /** The miner gets to include their reward */
+        const stateRoot = this.tree.rootHash;
+
+        this.logger.debug(`Executed new block ${this.blockNumber} with new root ${stateRoot.toString(16)} using ${gasUsed} gas`);
+
         return {
-            stateRoot: this.tree.rootHash,
-            gasUsed: 0n,
+            stateRoot: stateRoot,
+            gasUsed: gasUsed,
             timestamp: BigInt(Date.now()),
             order
         }
@@ -242,7 +269,26 @@ export class BlockGenerator {
         this.parentHash = hashAsBigInt(HashType.KECCAK256, genesisBin);
         this.gasLimit = genesisBlock.header.gasLimit;
         this.difficulty = genesisBlock.header.difficulty;
+
         this.logger.info(`Parent block set to ${this.parentHash.toString(16)}`);
+
+        const genesisJson = JSON.parse(await fs.promises.
+            readFile(path.join(this.options.configDir, this.options.config.genesisData), { encoding: 'utf8'} )) as GethStateDump;
+        for (const [id, account] of Object.entries(genesisJson.accounts)) {
+            // TODO: currently, this only supports accounts without storage
+            if (Object.entries(account.storage).length > 0) {
+                throw new Error('Genesis file with storage not yet supported');
+            }
+            // Parse the account so we can insert it into the tree.
+            const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), BigInt(`0x${account.codeHash}`), EthereumAccount.EMPTY_BUFFER_HASH);
+            this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount.toRlp());
+        }
+
+        if (this.tree.rootHash != genesisBlock.header.stateRoot) {
+            throw new Error(`Genesis root from block (${genesisBlock.header.stateRoot.toString(16)}) does not match imported root ${this.tree.rootHash.toString(16)}`)
+        }
+
+        this.logger.info(`Initialized state to stateRoot ${this.tree.rootHash.toString(16)}`);
 
         // Connect to the storage nodes
         for (let i = 0 ; i < 16; i++) {

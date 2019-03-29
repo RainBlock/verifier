@@ -6,10 +6,10 @@ const ACCOUNT_BALANCE = 1;
 const ACCOUNT_CODEHASH = 2;
 const ACCOUNT_STORAGEROOT = 3;
 
-const EMPTY_STRING_HASH = 0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470n;
-const EMPTY_BUFFER_HASH = 0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421n;
-
 export class EthereumAccount {
+
+    static readonly EMPTY_STRING_HASH = 0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470n;
+    static readonly EMPTY_BUFFER_HASH = 0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421n;
 
     constructor(public nonce : bigint, public balance : bigint, public codeHash : bigint, public storageRoot : bigint) {
 
@@ -29,14 +29,14 @@ export class EthereumAccount {
     }
 
     hasCode() {
-        return this.codeHash === EMPTY_STRING_HASH;
+        return this.codeHash === EthereumAccount.EMPTY_STRING_HASH;
     }
 }
 
 export function EthereumAccountFromBuffer(buf : Buffer) {
     const rlp  = RlpDecode(buf);
     const nonce = toBigIntBE(rlp[ACCOUNT_NONCE] as Buffer);
-    const balance = BigInt((rlp[ACCOUNT_BALANCE] as Buffer).toString('utf8'));
+    const balance = toBigIntBE((rlp[ACCOUNT_BALANCE] as Buffer));
     const codeHash = toBigIntBE(rlp[ACCOUNT_CODEHASH] as Buffer);
     const storageRoot = toBigIntBE(rlp[ACCOUNT_STORAGEROOT] as Buffer);
 
