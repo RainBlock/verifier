@@ -226,7 +226,7 @@ export class BlockGenerator {
     }
 
     /** Propose the block to the list of storage nodes. */
-    async proposeBlock(header: EthereumHeader, execution: ExecutionResult) {
+    async proposeBlock(header: EthereumHeader, execution: ExecutionResult) : Promise<bigint> {
         // Encode the new block. We don't support uncles.
         const block = encodeBlock(header, execution.order.map(data => data.txRlp), []);
 
@@ -258,19 +258,40 @@ export class BlockGenerator {
         }
 
         await Promise.all(shardRequestList);
+        return hashAsBigInt(HashType.KECCAK256, block);
     }
 
-    /** Every cycle, select as many incoming transactions as possible and
-     *  attempt to solve a "proof-of-work" puzzle.
-     */
-    async generate() {
+    /** Initializes the connections to all storage shards. */
+    async connectToStorageNodes() {
+        // Connect to the storage nodes
+        for (let i = 0 ; i < 16; i++) {
+            // For now, we only connect to the first node
+            const storageNodeAddress = this.options.config.storage[`${i}`];
+            this.verifiers[i] = new VerifierStorageClient(storageNodeAddress[0], grpc.credentials.createInsecure());
+            await new Promise((resolve, reject) => {
+                this.verifiers[i].waitForReady(Date.now() + this.options.config.rpc.storageTimeout, (error=> {
+                if (error) {
+                    this.logger.warn(`Shard ${i} connection failed: storage node at ${storageNodeAddress}: ${error}`)
+                    reject(new Error(`Failed to connect to shard ${i} at ${storageNodeAddress}`))
+                } else {
+                    this.logger.info(`Shard ${i} connected to storage node at ${storageNodeAddress}`);
+                    resolve();
+                }
+            }))
+            });
+        }
+    }
+
+    /** Initializes the initial state of the verifier to data found in the genesis files set in the config. */
+    async loadInitialStateFromGenesisData() {
         const genesisBin = await fs.promises.readFile(path.join(this.options.configDir, this.options.config.genesisBlock));
         const genesisBlock = await decodeBlock(RlpDecode(genesisBin) as RlpList);
         this.parentHash = hashAsBigInt(HashType.KECCAK256, genesisBin);
         this.gasLimit = genesisBlock.header.gasLimit;
         this.difficulty = genesisBlock.header.difficulty;
+        this.blockNumber = genesisBlock.header.blockNumber + 1n;
 
-        this.logger.info(`Parent block set to ${this.parentHash.toString(16)}`);
+        this.logger.info(`Parent block set to ${this.parentHash.toString(16)}, block number ${genesisBlock.header.blockNumber}`);
 
         const genesisJson = JSON.parse(await fs.promises.
             readFile(path.join(this.options.configDir, this.options.config.genesisData), { encoding: 'utf8'} )) as GethStateDump;
@@ -290,24 +311,24 @@ export class BlockGenerator {
 
         this.logger.info(`Initialized state to stateRoot ${this.tree.rootHash.toString(16)}`);
 
-        // Connect to the storage nodes
-        for (let i = 0 ; i < 16; i++) {
-            // For now, we only connect to the first node
-            const storageNodeAddress = this.options.config.storage[`${i}`];
-            this.verifiers[i] = new VerifierStorageClient(storageNodeAddress[0], grpc.credentials.createInsecure());
-            await new Promise((resolve, reject) => {
-                this.verifiers[i].waitForReady(Date.now() + this.options.config.rpc.storageTimeout, (error=> {
-                if (error) {
-                    this.logger.warn(`Shard ${i} connection failed: storage node at ${storageNodeAddress}: ${error}`)
-                    reject(new Error(`Failed to connect to shard ${i} at ${storageNodeAddress}`))
-                } else {
-                    this.logger.info(`Shard ${i} connected to storage node at ${storageNodeAddress}`);
-                    resolve();
-                }
-            }))
-            });
-        }
-        
+    }
+
+    /** Every cycle, select as many incoming transactions as possible and
+     *  attempt to solve a "proof-of-work" puzzle.
+     */
+    async generate() {
+
+        // Before we start, load the initial state from the genesis data.
+        // In the future, we will be able to pick either loading it from
+        // genesis or a storage node.
+        await this.loadInitialStateFromGenesisData();
+
+        // Connect to all storage shards and wait for the connections to
+        // be active before starting.
+        await this.connectToStorageNodes();
+
+        // The main loop, which generates blocks and proposes them to storage, or
+        // accepts blocks from other verifiers and verifies them.
         while (this.running) {
             // Take transactions off of the queue to be included into the new block
             const blockTransactions = this.txQueue;
@@ -329,8 +350,8 @@ export class BlockGenerator {
             // and remove and txHashes from that block currently in our queue.
 
             this.logger.info(`PoW solution found, proposing new block ${this.blockNumber.toString()}`);
-            await this.proposeBlock(header, executionResult);
-
+            this.parentHash = await this.proposeBlock(header, executionResult);
+            this.logger.info(`New block ${this.parentHash.toString(16)} successfully proposed, adopting as parent`);
             this.blockNumber++;
         }
     }
