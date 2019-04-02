@@ -3,7 +3,7 @@ import { ConfigurationFile } from './configFile';
 import { encodeBlock } from '@rainblock/ethereum-block'
 import { RlpList, RlpEncode, RlpDecode } from 'rlp-stream/build/src/rlp-stream';
 import { EthereumAccount, EthereumAccountFromBuffer } from './ethereumAccount';
-import { VerifierStorageClient, UpdateMsg, grpc, UpdateOp, StorageUpdate, ValueChangeOp, ExecutionOp, CreationOp, DeletionOp, MerklePatriciaTreeNode as ProtocolMerklePatriciaTree} from '@rainblock/protocol'
+import { VerifierStorageClient, UpdateMsg, grpc, UpdateOp, StorageUpdate, ValueChangeOp, ExecutionOp, CreationOp, DeletionOp, TransactionReply, MerklePatriciaTreeNode as ProtocolMerklePatriciaTree, ErrorCode} from '@rainblock/protocol'
 import { MerklePatriciaTree, CachedMerklePatriciaTree, MerklePatriciaTreeOptions, MerklePatriciaTreeNode } from '@rainblock/merkle-patricia-tree';
 import { GethStateDump } from './gethImport';
 
@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
+import { ServiceError } from 'grpc';
 
 export interface BlockGeneratorOptions {
     /** The maximum amount of time the proof of work puzzle takes to solve */
@@ -32,9 +33,11 @@ export interface TransactionData {
     /** Binary transaction */
     txBinary : Buffer;
     /** "bag of Proofs" submitted with transaction, keyed by node hash */
-    proofs: Map<bigint, MerklePatriciaTreeNode<Buffer>>;
+    proofs: Map<bigint, MerklePatriciaTreeNode<EthereumAccount>>;
     /** The write set */
     writeSet : Map<bigint, AccountUpdates>;
+    /** Reply callback */
+    callback: (error: ServiceError | null, reply : TransactionReply) => void;
 }
 
 /** Updates for each account */
@@ -53,8 +56,10 @@ interface ExecutionResult {
     gasUsed: bigint;
     /** The timestamp selected for this transaction. */
     timestamp: bigint;
-    /** The ordering of transactions in this execution */
+    /** The ordering of transactions in this execution. */
     order : TransactionData[]
+    /** The number of nanoseconds it took to order and execute the transactions. */
+    executionTime: bigint;
 }
 
 /** Class responsible for performing actual generation of blocks. */
@@ -65,7 +70,7 @@ export class BlockGenerator {
     private difficulty: bigint;
     private gasLimit : bigint;
     private beneficiary : bigint;
-    private tree : CachedMerklePatriciaTree<Buffer, Buffer>;
+    private tree : CachedMerklePatriciaTree<Buffer, EthereumAccount>;
     private verifiers : VerifierStorageClient[];
 
     private txQueue = new Map<bigint, TransactionData>();
@@ -77,7 +82,11 @@ export class BlockGenerator {
         this.gasLimit = 0n;
 
         this.beneficiary = BigInt(`0x${options.config.beneficiary}`);
-        this.tree = new CachedMerklePatriciaTree();
+        this.tree = new CachedMerklePatriciaTree<Buffer, EthereumAccount>({
+            keyConverter: k => k,
+            valueConverter: v => v.toRlp(),
+            putCanDelete: false
+        });
         this.verifiers = [];
 
         logger.debug(`New blocks will be assembled between every 0-${options.proofOfWorkTime/1000} seconds`);
@@ -114,22 +123,32 @@ export class BlockGenerator {
     /** Order and execute the given transaction map. */
     async orderAndExecuteTransactions(transactions : Map<bigint, TransactionData>) : Promise<ExecutionResult> {
         const order : TransactionData[] = [];
+        const start = process.hrtime.bigint();
         let gasUsed = 0n;
 
         for (const [txHash, tx] of transactions.entries()) {
             this.logger.debug(`Processing tx ${txHash.toString(16)}`);
 
             try {
+                // Pre-compute the from and to account hashes ONCE
+                const fromAccountHash = hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 20));
+                const toAccountHash = hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.to, 20));
+
                 // First, verify that the FROM account can be found and the
                 // nonce in the transaction is one greater than the account
                 // nonce.
-                const fromAccountBinary = 
-                    this.tree.getFromCache(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 20)), tx.proofs);
-                if (fromAccountBinary === null) {
-                    throw new Error(`From account ${tx.tx.from.toString(16)} does not exist!`);
+                let fromAccount = 
+                    this.tree.getFromCache(fromAccountHash, tx.proofs);
+
+                if (fromAccount === null) {
+                    if (!this.options.config.generateFromAccounts) {
+                        throw new Error(`From account ${tx.tx.from.toString(16)} does not exist!`);
+                    } else {
+                        fromAccount = new EthereumAccount(tx.tx.nonce, 500000000000n, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
+                    }
                 } 
-                const fromAccount = EthereumAccountFromBuffer(fromAccountBinary);
-                if (fromAccount.nonce !== tx.tx.nonce) {
+
+                if (!this.options.config.disableNonceCheck && tx.tx.nonce !== tx.tx.nonce) {
                     throw new Error(`From account ${tx.tx.from.toString(16)} had incorrect nonce ${fromAccount.nonce}, expected ${tx.tx.nonce}`);
                 }
 
@@ -138,23 +157,36 @@ export class BlockGenerator {
                     throw new Error(`tx ${txHash.toString(16)} CONTRACT_CREATION, but CONTRACT_CREATION not yet supported`);
                 }
 
-                const toAccountBinary = 
-                this.tree.getFromCache(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 20)), tx.proofs);
-
-                if (toAccountBinary === null) {
+                const toAccount = this.tree.getFromCache(toAccountHash, tx.proofs);
+                if (toAccount === null) {
                     // This means we're going to CREATE this account.
                     this.logger.debug(`tx ${txHash.toString(16)} create new account ${tx.tx.to.toString(16)}`);
                     const createOp = new CreationOp();
                     createOp.setAccount(toBufferBE(tx.tx.to, 20));
                     createOp.setValue(toBufferBE(tx.tx.value, 32));
+                    const toCreateOp = new UpdateOp();
+                    toCreateOp.setCreate(createOp);
                     tx.writeSet.set(tx.tx.to, {
-                        op: createOp
+                        op: toCreateOp
                     });
+
+                    const fromOp = new ValueChangeOp();
+                    fromOp.setAccount(toBufferBE(tx.tx.from, 20));
+                    fromOp.setValue(toBufferBE(tx.tx.from - tx.tx.value, 32));
+                    const fromUpdateOp = new UpdateOp();
+                    fromUpdateOp.setCreate(createOp);
+                    tx.writeSet.set(tx.tx.from, {
+                        op: fromUpdateOp
+                    });
+                    
+                    // Increment the nonce
+                    fromAccount.nonce += 1n;
+
                     // Update the tree
                     const newAccount = new EthereumAccount(0n, tx.tx.value, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
-                    this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.to, 20)), newAccount.toRlp());
+                    this.tree.put(toAccountHash, newAccount);
+                    this.tree.put(fromAccountHash, fromAccount); // Is there a method to invalidate any saved serialization (?)
                 } else {
-                    const toAccount = EthereumAccountFromBuffer(toAccountBinary);
                     if (toAccount.hasCode()) {
                         // TODO: execute code
                         this.logger.warn(`To account ${tx.tx.to.toString(16)} Code execution not yet implemented`);
@@ -169,38 +201,54 @@ export class BlockGenerator {
                         toAccount.balance += tx.tx.value;
                         
                         const fromOp = new ValueChangeOp();
+                        fromOp.setAccount(toBufferBE(tx.tx.from, 20));
                         fromOp.setValue(toBufferBE(toAccount.balance - tx.tx.value, 32));
                         fromOp.setChanges(1);
+                        const fromUpdateOp = new UpdateOp();
+                        fromUpdateOp.setValue(fromOp);
                         tx.writeSet.set(tx.tx.from, {
-                            op: fromOp
+                            op: fromUpdateOp
                             // And no storage changes
                         })
 
                         const toOp = new ValueChangeOp();
+                        toOp.setAccount(toBufferBE(tx.tx.to, 20));
                         toOp.setValue(toBufferBE(fromAccount.balance + tx.tx.value, 32));
                         toOp.setChanges(0); //0, because destination changes don't increment nonce
+                        const toUpdateOp = new UpdateOp();
+                        toUpdateOp.setValue(toOp);
                         tx.writeSet.set(tx.tx.to, {
-                            op: toOp
+                            op: toUpdateOp
                             // And no storage changes
                         })
 
                         // And update the tree
-                        this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 20)), fromAccount.toRlp());
-                        this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.to, 20)), toAccount.toRlp());
+                        this.tree.put(fromAccountHash, fromAccount);
+                        this.tree.put(toAccountHash, toAccount);
                     }
                 }
+
+            const reply = new TransactionReply();
+            reply.setCode(ErrorCode.ERROR_CODE_SUCCESS);
+            tx.callback(null, reply);
             order.push(tx);
+
             } catch (e) {
                 if (e instanceof Error) {
-                    this.logger.debug(`Skipping tx ${txHash.toString(16)} due to error:`);
-                    this.logger.debug(e.stack!);
+                  this.logger.info(`Skipping tx ${txHash.toString(16)} due to ${e.message}`);
+                  this.logger.debug(e.stack!);
                 } else {
-                    this.logger.debug(`Skipping tx ${txHash.toString(16)} due to ${e}`);
+                  this.logger.info(`Skipping tx ${txHash.toString(16)} due to ${e}`);
+                  
                 }
+                const reply = new TransactionReply();
+                reply.setCode(ErrorCode.ERROR_CODE_INVALID);
+                tx.callback(null, reply);
             }
         }
         
         /** The miner gets to include their reward */
+
         const stateRoot = this.tree.rootHash;
 
         this.logger.debug(`Executed new block ${this.blockNumber} with new root ${stateRoot.toString(16)} using ${gasUsed} gas`);
@@ -209,7 +257,8 @@ export class BlockGenerator {
             stateRoot: stateRoot,
             gasUsed: gasUsed,
             timestamp: BigInt(Date.now()),
-            order
+            order,
+            executionTime: process.hrtime.bigint() - start
         }
     }
 
@@ -236,7 +285,7 @@ export class BlockGenerator {
             const msg = new UpdateMsg();
             msg.setRlpBlock(block);
             msg.setMerkleTreeNodes(
-                RlpEncode(this.tree.rootNode.serialize(this.tree.options as MerklePatriciaTreeOptions<{}, Buffer>)));
+                RlpEncode(this.tree.rootNode.serialize(this.tree.options as MerklePatriciaTreeOptions<{}, EthereumAccount>)));
             // Itereate through the modification list. If it belongs to this shard, add it to the modifications
             for (const tx of execution.order) {
                 for (const [acct, updates] of tx.writeSet.entries()) {
@@ -302,7 +351,7 @@ export class BlockGenerator {
             }
             // Parse the account so we can insert it into the tree.
             const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), BigInt(`0x${account.codeHash}`), EthereumAccount.EMPTY_BUFFER_HASH);
-            this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount.toRlp());
+            this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount);
         }
 
         if (this.tree.rootHash != genesisBlock.header.stateRoot) {
@@ -337,6 +386,7 @@ export class BlockGenerator {
 
             // Decide on which transactions will be included in the block, order and execute them.
             const executionResult = await this.orderAndExecuteTransactions(blockTransactions);
+            this.logger.info(`Assembled ${executionResult.order.length} txes in ${executionResult.executionTime}ns`);
 
             // Calculate the transactionsRoot
             const transactionsRoot = await this.calculateTransactionsRoot(executionResult.order);

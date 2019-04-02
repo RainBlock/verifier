@@ -11,10 +11,7 @@ import { DummyStorageServer } from './dummyStorageService';
 import { VerifierService, VerifierClient, TransactionRequest, TransactionReply, VerifierStorageService, grpc } from '@rainblock/protocol'
 import { BlockGenerator } from './blockGenerator';
 import { ConfigurationFile } from './configFile';
-import { RlpDecode, RlpList } from 'rlp-stream/build/src/rlp-stream';
-import { decodeBlock } from '@rainblock/ethereum-block/dist/ethereum-block';
-import { GethStateDump } from './gethImport';
-import { EthereumAccount } from './ethereumAccount';
+import { RlpDecoderTransform, RlpEncode, RlpDecode, RlpList } from 'rlp-stream/build/src/rlp-stream';
 
 program.version('1').description('The rainblock verifier server')
     .command('serve', 'Start the verifier server')
@@ -90,6 +87,28 @@ program.command('test-transaction', 'Send a test transaction')
                 console.log(reply.getCode());
             }
         });
+    });
+
+program.command('test-transaction-list', 'Send a list of test transactions')
+    .option('--server <server>', 'Send transaction to <server>', program.STRING, 'localhost:9000')
+    .option('--txdata <tx-path>', 'Path to file with transaction data list', program.STRING, undefined, true)
+    .action(async (a, o, l) => {
+        const client = new VerifierClient(o['server'], grpc.credentials.createInsecure());
+        const request = new TransactionRequest();
+        const data = fs.createReadStream(o['txdata']);
+        const decoder = new RlpDecoderTransform();
+        data.pipe(decoder);
+
+        for await (const tx of decoder) {
+            request.setTransaction(RlpEncode(tx));
+            client.submitTransaction(request, (err: any, reply: TransactionReply) => {
+                if (err) {
+                    console.error(err);
+                } else {
+                    console.log(reply.getCode());
+                }
+            });
+        }
     });
 
 program.parse(process.argv);

@@ -3,9 +3,8 @@ import { toBigIntBE, toBufferBE } from 'bigint-buffer';
 
 const ACCOUNT_NONCE = 0;
 const ACCOUNT_BALANCE = 1;
-const ACCOUNT_CODEHASH = 2;
-const ACCOUNT_STORAGEROOT = 3;
-
+const ACCOUNT_STORAGEROOT = 2;
+const ACCOUNT_CODEHASH = 3;
 export class EthereumAccount {
 
     static readonly EMPTY_STRING_HASH = 0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470n;
@@ -29,7 +28,7 @@ export class EthereumAccount {
     }
 
     hasCode() {
-        return this.codeHash === EthereumAccount.EMPTY_STRING_HASH;
+        return this.codeHash !== EthereumAccount.EMPTY_STRING_HASH;
     }
 }
 

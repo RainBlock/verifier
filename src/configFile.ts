@@ -10,6 +10,10 @@ export interface ConfigurationFile {
     genesisBlock: string;
     /** Path to the genesis data file, exported by `geth dump`, relative to the config file */
     genesisData : string;
+    /** Whether or not to disable nonce checking. */
+    disableNonceCheck? : boolean;
+    /** If the from account doesn't exist, generate it instead of rejecting it. */
+    generateFromAccounts? : boolean;
 }
 
 /** RPC settings */

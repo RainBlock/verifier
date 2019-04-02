@@ -33,3 +33,16 @@ From this directory. Then run
 ```
 $ docker run rainblock-verifier:latest verifier serve
 ```
+
+# Running a simple workload
+
+The verifier comes with a simple test workload. The sample/txes.bin file contains a list of the first
+10K non-contract transactions (without proofs) in the Ethereum mainnet, and the genesis.bin/genesis.json
+files will initialize the verifier to the genesis state.
+
+You can run a test verifier client by running
+```
+$ verifier test-transaction-list --txdata=sample/txes.bin
+```
+
+Against a working verifier server.

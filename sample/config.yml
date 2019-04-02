@@ -41,3 +41,9 @@ beneficiary: 'ea674fdde714fd979de3edf0f56aa9716b898ec8'
 blockReward: 50000
 genesisBlock: 'genesis.bin'
 genesisData: 'genesis.json'
+# Required for parallel client submissions, since
+# the client will submit txes out of order
+disableNonceCheck: true
+# Needed because beneficiaries will not have
+# been generated
+generateFromAccounts : true
