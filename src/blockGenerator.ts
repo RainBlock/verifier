@@ -38,6 +38,8 @@ export interface TransactionData {
     writeSet : Map<bigint, AccountUpdates>;
     /** Reply callback */
     callback: (error: ServiceError | null, reply : TransactionReply) => void;
+    /** Final error code for sending the reply. */
+    errorCode? : ErrorCode;
 }
 
 /** Updates for each account */
@@ -228,9 +230,7 @@ export class BlockGenerator {
                     }
                 }
 
-            const reply = new TransactionReply();
-            reply.setCode(ErrorCode.ERROR_CODE_SUCCESS);
-            tx.callback(null, reply);
+            tx.errorCode = ErrorCode.ERROR_CODE_SUCCESS;
             order.push(tx);
 
             } catch (e) {
@@ -239,11 +239,9 @@ export class BlockGenerator {
                   this.logger.debug(e.stack!);
                 } else {
                   this.logger.info(`Skipping tx ${txHash.toString(16)} due to ${e}`);
-                  
                 }
-                const reply = new TransactionReply();
-                reply.setCode(ErrorCode.ERROR_CODE_INVALID);
-                tx.callback(null, reply);
+
+                tx.errorCode = ErrorCode.ERROR_CODE_INVALID;
             }
         }
         
@@ -362,6 +360,20 @@ export class BlockGenerator {
 
     }
 
+    /** Reply to clients with the result of the operations */
+    async replyToClients(transactions: Map<bigint, TransactionData>) {
+        const replyPromises = [];
+        for (const [id, tx] of transactions) {
+            const reply = new TransactionReply();
+            reply.setCode(tx.errorCode === undefined ? ErrorCode.ERROR_CODE_INVALID : tx.errorCode);
+            replyPromises.push(new Promise((resolve, reject) => {
+                tx.callback(null, reply);
+                resolve();
+            }));
+        }
+        await Promise.all(replyPromises);
+    }
+
     /** Every cycle, select as many incoming transactions as possible and
      *  attempt to solve a "proof-of-work" puzzle.
      */
@@ -392,7 +404,13 @@ export class BlockGenerator {
             const transactionsRoot = await this.calculateTransactionsRoot(executionResult.order);
 
             // Simulate solving the proof of work algorithm.
-            const header = await this.solveProofOfWork(executionResult, transactionsRoot);
+            const headerPromise = this.solveProofOfWork(executionResult, transactionsRoot);
+            // And simultaneously report success/failure to clients
+            const replyPromise = this.replyToClients(blockTransactions);
+
+            // Wait for both replies to finish and proof-of-work to be solved.
+            await Promise.all([headerPromise, replyPromise]);
+            const header = await headerPromise;
 
             // TODO: in parallel, another verifier may advertise a new solution to us.
             // If that is the case we drop our PoW, and verify their block
