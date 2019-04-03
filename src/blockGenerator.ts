@@ -1,6 +1,6 @@
 import { EthereumHeader, decodeBlock, EthereumTransaction, CONTRACT_CREATION } from '@rainblock/ethereum-block'
 import { ConfigurationFile } from './configFile';
-import { encodeBlock } from '@rainblock/ethereum-block'
+import { encodeBlock, encodeHeaderAsRLP } from '@rainblock/ethereum-block'
 import { RlpList, RlpEncode, RlpDecode } from 'rlp-stream/build/src/rlp-stream';
 import { EthereumAccount, EthereumAccountFromBuffer } from './ethereumAccount';
 import { VerifierStorageClient, UpdateMsg, grpc, UpdateOp, StorageUpdate, ValueChangeOp, ExecutionOp, CreationOp, DeletionOp, TransactionReply, MerklePatriciaTreeNode as ProtocolMerklePatriciaTree, ErrorCode} from '@rainblock/protocol'
@@ -36,6 +36,10 @@ export interface TransactionData {
     proofs: Map<bigint, MerklePatriciaTreeNode<EthereumAccount>>;
     /** The write set */
     writeSet : Map<bigint, AccountUpdates>;
+    /** The hash of the "from" account */
+    fromHash: Buffer;
+    /** The hash of the "to" account */
+    toHash: Buffer;
     /** Reply callback */
     callback: (error: ServiceError | null, reply : TransactionReply) => void;
     /** Final error code for sending the reply. */
@@ -132,15 +136,11 @@ export class BlockGenerator {
             this.logger.debug(`Processing tx ${txHash.toString(16)}`);
 
             try {
-                // Pre-compute the from and to account hashes ONCE
-                const fromAccountHash = hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.from, 20));
-                const toAccountHash = hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.tx.to, 20));
-
                 // First, verify that the FROM account can be found and the
                 // nonce in the transaction is one greater than the account
                 // nonce.
                 let fromAccount = 
-                    this.tree.getFromCache(fromAccountHash, tx.proofs);
+                    this.tree.getFromCache(tx.fromHash, tx.proofs);
 
                 if (fromAccount === null) {
                     if (!this.options.config.generateFromAccounts) {
@@ -159,7 +159,7 @@ export class BlockGenerator {
                     throw new Error(`tx ${txHash.toString(16)} CONTRACT_CREATION, but CONTRACT_CREATION not yet supported`);
                 }
 
-                const toAccount = this.tree.getFromCache(toAccountHash, tx.proofs);
+                const toAccount = this.tree.getFromCache(tx.toHash, tx.proofs);
                 if (toAccount === null) {
                     // This means we're going to CREATE this account.
                     this.logger.debug(`tx ${txHash.toString(16)} create new account ${tx.tx.to.toString(16)}`);
@@ -186,8 +186,8 @@ export class BlockGenerator {
 
                     // Update the tree
                     const newAccount = new EthereumAccount(0n, tx.tx.value, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
-                    this.tree.put(toAccountHash, newAccount);
-                    this.tree.put(fromAccountHash, fromAccount); // Is there a method to invalidate any saved serialization (?)
+                    this.tree.put(tx.toHash, newAccount);
+                    this.tree.put(tx.fromHash, fromAccount); // Is there a method to invalidate any saved serialization (?)
                 } else {
                     if (toAccount.hasCode()) {
                         // TODO: execute code
@@ -225,8 +225,8 @@ export class BlockGenerator {
                         })
 
                         // And update the tree
-                        this.tree.put(fromAccountHash, fromAccount);
-                        this.tree.put(toAccountHash, toAccount);
+                        this.tree.put(tx.fromHash, fromAccount);
+                        this.tree.put(tx.toHash, toAccount);
                     }
                 }
 
@@ -305,7 +305,7 @@ export class BlockGenerator {
         }
 
         await Promise.all(shardRequestList);
-        return hashAsBigInt(HashType.KECCAK256, block);
+        return hashAsBigInt(HashType.KECCAK256, RlpEncode(encodeHeaderAsRLP(header)));
     }
 
     /** Initializes the connections to all storage shards. */
@@ -333,7 +333,7 @@ export class BlockGenerator {
     async loadInitialStateFromGenesisData() {
         const genesisBin = await fs.promises.readFile(path.join(this.options.configDir, this.options.config.genesisBlock));
         const genesisBlock = await decodeBlock(RlpDecode(genesisBin) as RlpList);
-        this.parentHash = hashAsBigInt(HashType.KECCAK256, genesisBin);
+        this.parentHash = hashAsBigInt(HashType.KECCAK256, RlpEncode(encodeHeaderAsRLP(genesisBlock.header)));
         this.gasLimit = genesisBlock.header.gasLimit;
         this.difficulty = genesisBlock.header.difficulty;
         this.blockNumber = genesisBlock.header.blockNumber + 1n;

@@ -92,23 +92,39 @@ program.command('test-transaction', 'Send a test transaction')
 program.command('test-transaction-list', 'Send a list of test transactions')
     .option('--server <server>', 'Send transaction to <server>', program.STRING, 'localhost:9000')
     .option('--txdata <tx-path>', 'Path to file with transaction data list', program.STRING, undefined, true)
+    .option('--repeat', 'Whether or not to keep sending over and over again', program.BOOLEAN)
+    .option('--noreply', 'Do not wait for the reply', program.BOOLEAN)
     .action(async (a, o, l) => {
-        const client = new VerifierClient(o['server'], grpc.credentials.createInsecure());
-        const request = new TransactionRequest();
-        const data = fs.createReadStream(o['txdata']);
-        const decoder = new RlpDecoderTransform();
-        data.pipe(decoder);
+        do {
+            const client = new VerifierClient(o['server'], grpc.credentials.createInsecure());
+            const request = new TransactionRequest();
+            const data = fs.createReadStream(o['txdata']);
+            const decoder = new RlpDecoderTransform();
+            data.pipe(decoder);
+    
+            const promises = [];
+            const start = process.hrtime.bigint();
+            for await (const tx of decoder) {
+                request.setTransaction(RlpEncode(tx));
+                const promise = new Promise((resolve, reject) => {
+                    client.submitTransaction(request, (err: any, reply: TransactionReply) => {
+                    if (err) {
+                        reject();
+                    } else {
+                        resolve();
+                    }
+                });
+                });
+                promises.push(promise);
+            }
+            if (!o['noreply']) {
+                await Promise.all(promises);
+            }
+            const end = process.hrtime.bigint();
+            const total = end - start;
+            l.info(`Processed ${promises.length} txes in ${total} ns (${total/BigInt(promises.length)} ns/op)`);
+        } while (o['repeat']);
 
-        for await (const tx of decoder) {
-            request.setTransaction(RlpEncode(tx));
-            client.submitTransaction(request, (err: any, reply: TransactionReply) => {
-                if (err) {
-                    console.error(err);
-                } else {
-                    console.log(reply.getCode());
-                }
-            });
-        }
     });
 
 program.parse(process.argv);

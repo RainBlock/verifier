@@ -2,10 +2,10 @@ import {  TransactionRequest, TransactionReply, IVerifierServer, ErrorCode, grpc
 import { decodeTransaction, CONTRACT_CREATION } from '@rainblock/ethereum-block'
 import { RlpDecode, RlpList } from 'rlp-stream';
 import { BlockGenerator, AccountUpdates } from './blockGenerator';
-import { hashAsBigInt, HashType } from 'bigint-hash';
+import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { CachedMerklePatriciaTree, MerklePatriciaTreeNode } from '@rainblock/merkle-patricia-tree';
 import { EthereumAccount, EthereumAccountFromBuffer } from './ethereumAccount';
-
+import { toBufferBE, toBigIntBE } from 'bigint-buffer';
 export class VerifierServer implements IVerifierServer {
 
     constructor(private logger: Logger, private blockGenerator : BlockGenerator,
@@ -39,6 +39,8 @@ export class VerifierServer implements IVerifierServer {
             tx,
             proofs,
             writeSet: new Map<bigint, AccountUpdates>(),
+            fromHash: hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.from, 20)),
+            toHash: hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.to, 20)),
             callback
         });
     }
