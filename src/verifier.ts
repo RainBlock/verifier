@@ -184,7 +184,7 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
         }, [], []);
 
         await fs.promises.writeFile(o['json'], JSON.stringify(json, null, 2), 'utf8');
-        await fs.promises.writeFile(o['map'], JSON.stringify(json, null, 2), 'utf8');
+        await fs.promises.writeFile(o['map'], JSON.stringify(map, null, 2), 'utf8');
         await fs.promises.writeFile(o['block'], RlpEncode(block));
     });
 
