@@ -1,0 +1,46 @@
+# Sample config file. A full schema can be seen in '../src/configFile.ts'
+#
+# A list of storage nodes, by shard. Currently we just support one level
+# of sharding, but that does mean you need to define 16 nodes.
+storage:
+  0:
+    - 'localhost:9100'
+  1:
+    - 'localhost:9101'
+  2:
+    - 'localhost:9102'
+  3:
+    - 'localhost:9103'
+  4:
+    - 'localhost:9104'
+  5:
+    - 'localhost:9105'
+  6:
+    - 'localhost:9106'
+  7:
+    - 'localhost:9107'
+  8:
+    - 'localhost:9108'
+  9:
+    - 'localhost:9109'
+  10:
+    - 'localhost:9110'
+  11:
+    - 'localhost:9111'
+  12:
+    - 'localhost:9112'
+  13:
+    - 'localhost:9113'
+  14:
+    - 'localhost:9114'
+  15:
+    - 'localhost:9115'
+rpc: 
+  storageTimeout: 5000
+beneficiary: 'ea674fdde714fd979de3edf0f56aa9716b898ec8'
+blockReward: 50000
+genesisBlock: 'simple.bin'
+genesisData: 'simple.json'
+disableNonceCheck: false
+generateFromAccounts : false
+pruneDepth: 1

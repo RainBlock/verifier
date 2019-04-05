@@ -92,7 +92,7 @@ export class BlockGenerator {
             keyConverter: k => k,
             valueConverter: v => v.toRlp(),
             putCanDelete: false
-        });
+        }, options.config.pruneDepth);
         this.verifiers = [];
 
         logger.debug(`New blocks will be assembled between every 0-${options.proofOfWorkTime/1000} seconds`);
@@ -150,7 +150,7 @@ export class BlockGenerator {
                     }
                 } 
 
-                if (!this.options.config.disableNonceCheck && tx.tx.nonce !== tx.tx.nonce) {
+                if (!this.options.config.disableNonceCheck && tx.tx.nonce !== fromAccount.nonce) {
                     throw new Error(`From account ${tx.tx.from.toString(16)} had incorrect nonce ${fromAccount.nonce}, expected ${tx.tx.nonce}`);
                 }
 
@@ -197,7 +197,7 @@ export class BlockGenerator {
                         fromAccount.nonce += 1n;
                         fromAccount.balance -= tx.tx.value;
                         toAccount.balance += tx.tx.value;
-                        
+
                         const fromOp = new UpdateOp();
                         fromOp.setAccount(toBufferBE(tx.tx.from, 20));
                         fromOp.setBalance(toBufferBE(toAccount.balance - tx.tx.value, 32));
@@ -343,6 +343,9 @@ export class BlockGenerator {
             const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), BigInt(`0x${account.codeHash}`), EthereumAccount.EMPTY_BUFFER_HASH);
             this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount);
         }
+
+        // Apparently we need to manually call this
+        this.tree.pruneStateCache();
 
         if (this.tree.rootHash != genesisBlock.header.stateRoot) {
             throw new Error(`Genesis root from block (${genesisBlock.header.stateRoot.toString(16)}) does not match imported root ${this.tree.rootHash.toString(16)}`)

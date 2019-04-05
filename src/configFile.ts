@@ -14,6 +14,8 @@ export interface ConfigurationFile {
     disableNonceCheck? : boolean;
     /** If the from account doesn't exist, generate it instead of rejecting it. */
     generateFromAccounts? : boolean;
+    /** Pruning depth for the cached merkle tree */
+    pruneDepth? : number;
 }
 
 /** RPC settings */

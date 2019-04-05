@@ -13,7 +13,7 @@ import { BlockGenerator } from './blockGenerator';
 import { ConfigurationFile } from './configFile';
 import { RlpDecoderTransform, RlpEncode, RlpDecode, RlpList } from 'rlp-stream/build/src/rlp-stream';
 import { MerklePatriciaTree } from '@rainblock/merkle-patricia-tree/build/src';
-import { getPublicAddress, encodeBlock } from '@rainblock/ethereum-block';
+import { EthereumTransaction, getPublicAddress, signTransaction, encodeBlock } from '@rainblock/ethereum-block';
 import { EthereumAccount } from './ethereumAccount';
 import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
@@ -186,6 +186,99 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
         await fs.promises.writeFile(o['json'], JSON.stringify(json, null, 2), 'utf8');
         await fs.promises.writeFile(o['map'], JSON.stringify(map, null, 2), 'utf8');
         await fs.promises.writeFile(o['block'], block);
+    });
+
+
+program.command('submit-tx', 'Submit a transaction using parameters given.')
+    .option('--server <server>', 'Send transaction to <server>', program.STRING, 'localhost:9000')
+    .option('--file <path>', 'Save transaction as binary to <path> instead of sending to server', program.STRING, undefined)
+    .option('--key <private-key>', '<private-key>, in hex to use', program.STRING, undefined, true)
+    .option('--to <account>', '<account>, in hex to send to', program.STRING, undefined, true)
+    .option('--nonce <number>', '<number> of transactions from this account', program.INTEGER, 0)
+    .option('--gas <amount>', '<amount> of gas to start with', program.INTEGER, 21000)
+    .option('--gasPrice <wei>', '<wei> to pay for each unit of gas used', program.INTEGER, 1)
+    .option('--value <wei>', '<wei> to send with the transaction', program.INTEGER, 1)
+    .option('--chain <id>', '<id> of the chain (0 for pre-EIP-155 semantics, 1 for mainnet)', program.INTEGER, 0)
+    .option('--data <data>', '<data> in hex to send with the transaction', program.STRING, "")
+    .option('--proof', 'generate proofs (for simple txes)',  program.BOOLEAN, false)
+    .option('--proofState <path>', '<path> to json state to generate proof from', program.STRING, "sample/simple.json")
+    .option('--proofTrim <depth>', 'trim any proof level above <depth>',  program.INTEGER, 0)
+    .action(async (a, o, l) => {
+        // Pad the input key and the to account
+        const keyPadded = (o['key'] as string).padStart(64, '0');
+        const toPadded = (o['to'] as string).padStart(40, '0');
+        const transaction : EthereumTransaction = {
+            nonce: BigInt(o['nonce']),
+            gasLimit: BigInt(o['gas']),
+            gasPrice: BigInt(o['gasPrice']),
+            value: BigInt(o['value']),
+            to: toBigIntBE(Buffer.from(toPadded, 'hex')),
+            data: Buffer.from(o["data"], 'hex'),
+            from: 0n
+        };
+        // Sign the transaction and generate the binary
+        const signedTransaction = signTransaction(transaction, toBigIntBE(Buffer.from(keyPadded, 'hex')), o['chain']);
+        const txBinary = RlpEncode(signedTransaction);
+        let proof = [];
+
+        // Generate the proof (for simple tx only)
+        if (o['proof']) {
+            const tree = new MerklePatriciaTree();
+            const json = JSON.parse(await fs.promises.readFile(o['proofState'], { encoding: 'utf8'} )) as GethStateDump;
+            for (const [id, account] of Object.entries(json.accounts)) {
+                // TODO: currently, this only supports accounts without storage
+                if (Object.entries(account.storage).length > 0) {
+                    throw new Error('Proof state file with storage not yet supported');
+                }
+                const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), BigInt(`0x${account.codeHash}`), EthereumAccount.EMPTY_BUFFER_HASH);
+                tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount.toRlp());
+            }
+            const fromProof = tree.get(hashAsBuffer(HashType.KECCAK256, toBufferBE(await getPublicAddress(BigInt(`0x${keyPadded}`)), 20)));
+            const toProof = tree.get(hashAsBuffer(HashType.KECCAK256, Buffer.from(toPadded, 'hex')));
+
+            proof.push(...fromProof.proof.slice(o['proofTrim']));
+            proof.push(...toProof.proof.slice(o['proofTrim']));
+            l.debug(`Added ${proof.length} nodes to proof`);
+        }
+
+        // Save to file or send to remote
+        if (o['file']) {
+            await fs.promises.writeFile(o['file'], txBinary);
+        } else {
+            const client = new VerifierClient(o['server'], grpc.credentials.createInsecure());
+            const request = new TransactionRequest();
+            request.setTransaction(txBinary);
+            if (o['proof']) {
+                const proofs = proof.map(p => p.getRlpNodeEncoding({
+                    keyConverter: k => k as Buffer,
+                    valueConverter: v => v,
+                    putCanDelete: false}));
+                const fullBytes = proofs.reduce((p, c, i) => p + c.length, 0);
+                l.debug(`Proofs total size: ${fullBytes}`);
+                const hashes : bigint[] = [];
+                const reduced = [];
+                for (const proof of proofs) {
+                    const hash = hashAsBigInt(HashType.KECCAK256, proof);
+                    if (hashes.indexOf(hash) === -1) {
+                        hashes.push(hash);
+                        reduced.push(proof);
+                    }
+                }
+                const reducedBytes = reduced.reduce((p, c, i) => p + c.length, 0);
+                l.debug(`Overlap reduction - removed ${proofs.length - reduced.length} proofs, reduced ${fullBytes - reducedBytes} bytes to ${reducedBytes}`);
+                request.setAccountWitnessesList(proofs);
+            }
+            await new Promise((resolve, reject) => {
+                client.submitTransaction(request, (err: any, reply: TransactionReply) => {
+                if (err) {
+                    reject();
+                } else {
+                    resolve();
+                }
+            });
+            });
+            client.close();
+        }
     });
 
 program.parse(process.argv);

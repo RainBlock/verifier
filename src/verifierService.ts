@@ -27,8 +27,8 @@ export class VerifierServer implements IVerifierServer {
         // Transform the partial tree into a map we can reference
         const proofs = new Map<bigint, MerklePatriciaTreeNode<EthereumAccount>>();
         for (const witness of call.request.getAccountWitnessesList_asU8()) {
-            proofs.set(hashAsBigInt(HashType.KECCAK256, witness as Buffer), 
-            this.tree.rlpToMerkleNode(witness as Buffer, v => EthereumAccountFromBuffer(v)));
+            proofs.set(hashAsBigInt(HashType.KECCAK256, Buffer.from(witness)), 
+            this.tree.rlpToMerkleNode(Buffer.from(witness), v => v.length > 0 ? EthereumAccountFromBuffer(v) : v as {} as EthereumAccount));
         }
 
         // Queue the transaction to be added into the next block
