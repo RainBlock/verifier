@@ -360,7 +360,7 @@ program.command('proof-size', 'Calculate the sizes of proofs using varying param
             data[accounts] = accountData;
         }
 
-        await fs.promises.writeFile(o['path'], JSON.stringify(data, null, 2), 'utf8');
+        await fs.promises.writeFile(o['file'], JSON.stringify(data, null, 2), 'utf8');
     });
 
 program.parse(process.argv);
