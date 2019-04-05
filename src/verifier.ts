@@ -12,13 +12,12 @@ import { VerifierService, VerifierClient, TransactionRequest, TransactionReply, 
 import { BlockGenerator } from './blockGenerator';
 import { ConfigurationFile } from './configFile';
 import { RlpDecoderTransform, RlpEncode, RlpDecode, RlpList } from 'rlp-stream/build/src/rlp-stream';
-import { MerklePatriciaTree } from '@rainblock/merkle-patricia-tree/build/src';
+import { CachedMerklePatriciaTree, MerklePatriciaTree } from '@rainblock/merkle-patricia-tree/build/src';
 import { EthereumTransaction, getPublicAddress, signTransaction, encodeBlock } from '@rainblock/ethereum-block';
 import { EthereumAccount } from './ethereumAccount';
 import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
 import { GethStateDump } from './gethImport';
-import { roots } from 'protobufjs';
 
 program.version('1').description('The rainblock verifier server')
     .command('serve', 'Start the verifier server')
@@ -279,6 +278,89 @@ program.command('submit-tx', 'Submit a transaction using parameters given.')
             });
             client.close();
         }
+    });
+
+program.command('proof-size', 'Calculate the sizes of proofs using varying parameters.')
+    .option('--file <path>', 'Save data file to <path>', program.STRING, undefined, true)
+    .action(async (a, o, l) => {
+        const dummySimpleData = new EthereumAccount(0n, 5000000n, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH).toRlp();
+        const ADDRESS_COUNT = 64; // Represents the maximum number of calls
+        // [...Array(ADDRESS_COUNT + 1).keys()].slice(1)
+        // returns an array [1...ADDRESS_COUNT]
+        const addresses = await Promise.all([...Array(ADDRESS_COUNT + 1).keys()].slice(1).map(k => getPublicAddress(BigInt(k))));
+        const hashes = addresses.map(m => hashAsBuffer(HashType.KECCAK256, toBufferBE(m, 20)));
+        const data : { [ count : number] : {} } = {};
+
+        for (let accounts = 100000; accounts <= 10_000_000; accounts *= 10) {
+            const accountData : any = {};
+            accountData.pruningLevel = {};
+            const tree = new MerklePatriciaTree();
+            for (let accountKey = 1; accountKey < accounts + 1; accountKey++) {
+                const address = await getPublicAddress(BigInt(accountKey));               
+                tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(address, 20)), dummySimpleData);
+            }
+
+            const witness = hashes.map(m => tree.get(m));
+            
+            l.debug(`${accounts} depths: ${witness.map(m => m.proof.length)}`);
+
+            accountData.depths = witness.map(m => m.proof.length);
+
+            const converted = witness.map(m => m.proof) 
+                .map(ps => ps.map(p => p.getRlpNodeEncoding({
+                    keyConverter: k => k as Buffer,
+                    valueConverter: v => v,
+                    putCanDelete: false})));
+                
+
+            // try different pruning depths starting at 10 to 0
+            for (let depth = 10; depth >= 0; depth--) {
+                const depthData : any = {};
+                
+                const sliced = converted.map(m => m.length > depth ? m.slice(depth) : [m[m.length - 1]]) // preserve the last proof
+
+                // for 2-ADDRESS_COUNT...
+                for (let totalAccounts = 2; totalAccounts < ADDRESS_COUNT + 1; totalAccounts++) {
+                    const callData : any = {};
+
+                    const proofs : Buffer[] = [];
+                    sliced.slice(0, totalAccounts)
+                        .forEach(s => proofs.push(...s));
+
+                    const unprunedProofs : Buffer[] = [];
+                    converted.slice(0, totalAccounts)
+                        .forEach(s => unprunedProofs.push(...s));
+                    const unprunedBytes = unprunedProofs.reduce((p, c, i) => p + c.length, 0);
+                
+
+                    const fullBytes = proofs.reduce((p, c, i) => p + c.length, 0);
+
+                    callData.unprunedBytes = unprunedBytes;
+                    callData.prunedBytes = fullBytes;
+
+                    l.debug(`${accounts} ${depth} ${totalAccounts} Proofs total size: pruned ${fullBytes} vs unpruned ${unprunedBytes} (${((1 - (fullBytes/unprunedBytes)) * 100).toFixed(2)}%)`);
+                    const hashes : bigint[] = [];
+                    const reduced = [];
+                    for (const proof of proofs) {
+                        const hash = hashAsBigInt(HashType.KECCAK256, proof);
+                        if (hashes.indexOf(hash) === -1) {
+                            hashes.push(hash);
+                            reduced.push(proof);
+                        }
+                    }
+
+                    const reducedBytes = reduced.reduce((p, c, i) => p + c.length, 0);
+                    callData.reducedBytes = reducedBytes;
+                    depthData[totalAccounts] = callData;
+                    l.debug(`${accounts} ${depth} ${totalAccounts} Overlap reduction - removed ${proofs.length - reduced.length} proofs, reduced ${fullBytes - reducedBytes} bytes to ${reducedBytes} (${((1 - (reducedBytes/fullBytes)) * 100).toFixed(2)}% vs pruned, ${((1 - (reducedBytes/unprunedBytes)) * 100).toFixed(2)}% vs unpruned)`);
+                }
+                accountData.pruningLevel[depth] = depthData;
+            }
+
+            data[accounts] = accountData;
+        }
+
+        await fs.promises.writeFile(o['path'], JSON.stringify(data, null, 2), 'utf8');
     });
 
 program.parse(process.argv);
