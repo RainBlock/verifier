@@ -3,9 +3,9 @@ import { ConfigurationFile } from './configFile';
 import { encodeBlock, encodeHeaderAsRLP } from '@rainblock/ethereum-block'
 import { RlpList, RlpEncode, RlpDecode } from 'rlp-stream/build/src/rlp-stream';
 import { EthereumAccount, EthereumAccountFromBuffer } from './ethereumAccount';
-import { VerifierStorageClient, UpdateMsg, grpc, UpdateOp, StorageUpdate, ValueChangeOp, ExecutionOp, CreationOp, DeletionOp, TransactionReply, MerklePatriciaTreeNode as ProtocolMerklePatriciaTree, ErrorCode} from '@rainblock/protocol'
+import { VerifierStorageClient, UpdateMsg, grpc, UpdateOp, StorageUpdate, TransactionReply, MerklePatriciaTreeNode as ProtocolMerklePatriciaTree, ErrorCode} from '@rainblock/protocol'
 import { MerklePatriciaTree, CachedMerklePatriciaTree, MerklePatriciaTreeOptions, MerklePatriciaTreeNode } from '@rainblock/merkle-patricia-tree';
-import { GethStateDump } from './gethImport';
+import { GethStateDump, GethStateDumpAccount } from './gethImport';
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -49,7 +49,7 @@ export interface TransactionData {
 /** Updates for each account */
 export interface AccountUpdates {
     /** The operation type */
-    op: UpdateOp | ValueChangeOp | ExecutionOp | CreationOp | DeletionOp;
+    op: UpdateOp;
     /** Any storage updates */
     storageUpdates? : StorageUpdate[];
 }
@@ -163,22 +163,18 @@ export class BlockGenerator {
                 if (toAccount === null) {
                     // This means we're going to CREATE this account.
                     this.logger.debug(`tx ${txHash.toString(16)} create new account ${tx.tx.to.toString(16)}`);
-                    const createOp = new CreationOp();
+                    const createOp = new UpdateOp();
                     createOp.setAccount(toBufferBE(tx.tx.to, 20));
-                    createOp.setValue(toBufferBE(tx.tx.value, 32));
-                    const toCreateOp = new UpdateOp();
-                    toCreateOp.setCreate(createOp);
+                    createOp.setBalance(toBufferBE(tx.tx.value, 32));
                     tx.writeSet.set(tx.tx.to, {
-                        op: toCreateOp
+                        op: createOp
                     });
 
-                    const fromOp = new ValueChangeOp();
+                    const fromOp = new UpdateOp();
                     fromOp.setAccount(toBufferBE(tx.tx.from, 20));
-                    fromOp.setValue(toBufferBE(tx.tx.from - tx.tx.value, 32));
-                    const fromUpdateOp = new UpdateOp();
-                    fromUpdateOp.setCreate(createOp);
+                    fromOp.setBalance(toBufferBE(tx.tx.from - tx.tx.value, 32));
                     tx.writeSet.set(tx.tx.from, {
-                        op: fromUpdateOp
+                        op: fromOp
                     });
                     
                     // Increment the nonce
@@ -202,25 +198,21 @@ export class BlockGenerator {
                         fromAccount.balance -= tx.tx.value;
                         toAccount.balance += tx.tx.value;
                         
-                        const fromOp = new ValueChangeOp();
+                        const fromOp = new UpdateOp();
                         fromOp.setAccount(toBufferBE(tx.tx.from, 20));
-                        fromOp.setValue(toBufferBE(toAccount.balance - tx.tx.value, 32));
-                        fromOp.setChanges(1);
-                        const fromUpdateOp = new UpdateOp();
-                        fromUpdateOp.setValue(fromOp);
+                        fromOp.setBalance(toBufferBE(toAccount.balance - tx.tx.value, 32));
+                        fromOp.setUpdates(1);
                         tx.writeSet.set(tx.tx.from, {
-                            op: fromUpdateOp
+                            op: fromOp
                             // And no storage changes
                         })
 
-                        const toOp = new ValueChangeOp();
+                        const toOp = new UpdateOp();
                         toOp.setAccount(toBufferBE(tx.tx.to, 20));
-                        toOp.setValue(toBufferBE(fromAccount.balance + tx.tx.value, 32));
-                        toOp.setChanges(0); //0, because destination changes don't increment nonce
-                        const toUpdateOp = new UpdateOp();
-                        toUpdateOp.setValue(toOp);
+                        toOp.setBalance(toBufferBE(fromAccount.balance + tx.tx.value, 32));
+                        toOp.setUpdates(0); //0, because destination changes don't increment nonce
                         tx.writeSet.set(tx.tx.to, {
-                            op: toUpdateOp
+                            op: toOp
                             // And no storage changes
                         })
 

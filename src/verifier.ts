@@ -12,6 +12,13 @@ import { VerifierService, VerifierClient, TransactionRequest, TransactionReply, 
 import { BlockGenerator } from './blockGenerator';
 import { ConfigurationFile } from './configFile';
 import { RlpDecoderTransform, RlpEncode, RlpDecode, RlpList } from 'rlp-stream/build/src/rlp-stream';
+import { MerklePatriciaTree } from '@rainblock/merkle-patricia-tree/build/src';
+import { getPublicAddress, encodeBlock } from '@rainblock/ethereum-block';
+import { EthereumAccount } from './ethereumAccount';
+import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
+import { toBufferBE, toBigIntBE } from 'bigint-buffer';
+import { GethStateDump } from './gethImport';
+import { roots } from 'protobufjs';
 
 program.version('1').description('The rainblock verifier server')
     .command('serve', 'Start the verifier server')
@@ -125,6 +132,60 @@ program.command('test-transaction-list', 'Send a list of test transactions')
             l.info(`Processed ${promises.length} txes in ${total} ns (${total/BigInt(promises.length)} ns/op)`);
         } while (o['repeat']);
 
+    });
+
+program.command('generate-genesis', 'Generate a genesis file and block with test accounts')
+    .option('--json <path>', '<path> for generated json (state file)', program.STRING, undefined, true)
+    .option('--block <path>', '<path> for generated block file', program.STRING, undefined, true)
+    .option('--map <path>', '<path> for map of privkey to account', program.STRING, undefined, true)
+    .option('--accounts <number>', '<number> of accounts to generate', program.INTEGER, 100000, true)
+    .option('--balance <amount>', '<amount> to seed each account balance with', program.INTEGER, 100000, true)
+    .action(async (a, o, l) => {
+        let private_key = 1n;
+        const tree = new MerklePatriciaTree();
+        const json : GethStateDump = {
+            root: "",
+            accounts: {}
+        }
+        const map : { [private_key : string] : string} = {};
+        while (private_key < (BigInt(o['accounts']) + 1n)) {
+            const address = await getPublicAddress(private_key);
+            const account = new EthereumAccount(0n, BigInt(o['balance']), EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
+            tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(address, 20)), account.toRlp());
+            json.accounts[address.toString(16)] = {
+                balance: account.balance.toString(),
+                nonce: Number(account.nonce),
+                codeHash: account.codeHash.toString(16),
+                storage: {},
+                code: "",
+                root: account.storageRoot.toString(16)
+            };
+            map[private_key.toString(16)] = address.toString(16); 
+            private_key++;
+        }
+
+        json.root = tree.rootHash.toString(16);
+        const block = encodeBlock( {
+            parentHash: 0n,
+            uncleHash: 0n,
+            beneficiary: 0n,
+            stateRoot: tree.rootHash,
+            transactionsRoot: EthereumAccount.EMPTY_BUFFER_HASH,
+            receiptsRoot: EthereumAccount.EMPTY_BUFFER_HASH, 
+            logsBloom: Buffer.from([]), 
+            difficulty: 0n,
+            gasLimit: 0n,
+            gasUsed: 0n,
+            timestamp: BigInt(new Date().valueOf()),
+            extraData: Buffer.from("rainblock-genesis", "ascii"),
+            mixHash: 0n, // TODO: generate a valid mixHash
+            nonce: 0n, // TODO: pick a valid nonce
+            blockNumber: 0n
+        }, [], []);
+
+        await fs.promises.writeFile(o['json'], JSON.stringify(json, null, 2), 'utf8');
+        await fs.promises.writeFile(o['map'], JSON.stringify(json, null, 2), 'utf8');
+        await fs.promises.writeFile(o['block'], RlpEncode(block));
     });
 
 program.parse(process.argv);
