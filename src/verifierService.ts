@@ -38,7 +38,6 @@ export class VerifierServer implements IVerifierServer {
             txBinary,
             tx,
             proofs,
-            writeSet: new Map<bigint, AccountUpdates>(),
             fromHash: hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.from, 20)),
             toHash: hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.to, 20)),
             callback
