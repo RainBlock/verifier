@@ -8,16 +8,17 @@ import * as yaml from 'js-yaml';
 
 import { VerifierServer } from './verifierService';
 import { DummyStorageServer } from './dummyStorageService';
-import { VerifierService, VerifierClient, TransactionRequest, TransactionReply, VerifierStorageService, grpc } from '@rainblock/protocol'
+import { VerifierService, VerifierClient, TransactionRequest, TransactionReply, StorageNodeService, VerifierStorageService, grpc } from '@rainblock/protocol'
 import { BlockGenerator } from './blockGenerator';
 import { ConfigurationFile } from './configFile';
 import { RlpDecoderTransform, RlpEncode, RlpDecode, RlpList } from 'rlp-stream/build/src/rlp-stream';
 import { CachedMerklePatriciaTree, MerklePatriciaTree } from '@rainblock/merkle-patricia-tree/build/src';
-import { EthereumTransaction, getPublicAddress, signTransaction, encodeBlock } from '@rainblock/ethereum-block';
+import { EthereumTransaction, getPublicAddress, signTransaction, encodeBlock, CONTRACT_CREATION } from '@rainblock/ethereum-block';
 import { EthereumAccount } from './ethereumAccount';
 import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
 import { GethStateDump } from './gethImport';
+import { ServiceDefinition } from 'grpc';
 
 program.version('1').description('The rainblock verifier server')
     .command('serve', 'Start the verifier server')
@@ -69,7 +70,9 @@ program.command('test-storage', 'Start up a test storage node')
         for (let i = 0; i < 16; i++) {
             const nodeAddress = `0.0.0.0:${o[`shard${i}`]}`;
             const server = new grpc.Server();
-            server.addService(VerifierStorageService, new DummyStorageServer(l));
+            const storageServer = new DummyStorageServer(l);
+            server.addService(VerifierStorageService as ServiceDefinition<DummyStorageServer>, storageServer);
+            server.addService(StorageNodeService as ServiceDefinition<DummyStorageServer>, storageServer);
             server.bind(nodeAddress, grpc.ServerCredentials.createInsecure());
             server.start();
 
@@ -211,7 +214,7 @@ program.command('submit-tx', 'Submit a transaction using parameters given.')
             gasLimit: BigInt(o['gas']),
             gasPrice: BigInt(o['gasPrice']),
             value: BigInt(o['value']),
-            to: toBigIntBE(Buffer.from(toPadded, 'hex')),
+            to: o['to'] ===  "-1" ? CONTRACT_CREATION : toBigIntBE(Buffer.from(toPadded, 'hex')),
             data: Buffer.from(o["data"], 'hex'),
             from: 0n
         };

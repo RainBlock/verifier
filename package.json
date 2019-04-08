@@ -23,7 +23,7 @@
     "typescript": "^3.3.4000"
   },
   "dependencies": {
-    "@rainblock/ethereum-block": "^2.1.0",
+    "@rainblock/ethereum-block": "^2.1.2",
     "@rainblock/merkle-patricia-tree": "^4.3.1",
     "@rainblock/protocol": "^4.0.0",
     "@types/js-yaml": "^3.12.0",
