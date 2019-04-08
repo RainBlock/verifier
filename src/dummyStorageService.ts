@@ -13,23 +13,27 @@ import * as fs from 'fs';
 
 export class DummyStorageServer implements IVerifierStorageServer, IStorageNodeServer {
 
-    tree = new MerklePatriciaTree<Buffer, EthereumAccount>();
+    tree = new MerklePatriciaTree<Buffer, EthereumAccount>( {
+        keyConverter: k => k,
+        valueConverter: v => v.toRlp(),
+        putCanDelete: false
+    });
 
     constructor(private logger : Logger, genesisData?: string) {
 
         if (genesisData !== undefined) {
         const genesisJson = JSON.parse(fs.
             readFileSync(genesisData, { encoding: 'utf8'} )) as GethStateDump;
-        for (const [id, account] of Object.entries(genesisJson.accounts)) {
-            // TODO: currently, this only supports accounts without storage
-            if (Object.entries(account.storage).length > 0) {
-                throw new Error('Genesis file with storage not yet supported');
+            for (const [id, account] of Object.entries(genesisJson.accounts)) {
+                // TODO: currently, this only supports accounts without storage
+                if (Object.entries(account.storage).length > 0) {
+                    throw new Error('Genesis file with storage not yet supported');
+                }
+                // Parse the account so we can insert it into the tree.
+                const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), BigInt(`0x${account.codeHash}`), EthereumAccount.EMPTY_BUFFER_HASH);
+                this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount);
             }
-            // Parse the account so we can insert it into the tree.
-            const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), BigInt(`0x${account.codeHash}`), EthereumAccount.EMPTY_BUFFER_HASH);
-            this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount);
         }
-    }
 
         this.logger.info(`Initialized state to stateRoot ${this.tree.rootHash.toString(16)}`);
     }

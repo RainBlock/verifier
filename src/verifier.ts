@@ -66,11 +66,12 @@ program.command('test-storage', 'Start up a test storage node')
     .option('--shard13 <port-number>', 'Serve shard 13 on <port-number>.', program.INTEGER, 9113)
     .option('--shard14 <port-number>', 'Serve shard 14 on <port-number>.', program.INTEGER, 9114)
     .option('--shard15 <port-number>', 'Serve shard 15 on <port-number>.', program.INTEGER, 9115)
+    .option('--json <path>', '<path> for generated json (state file)', program.STRING)
     .action(async (a, o, l) => {
         for (let i = 0; i < 16; i++) {
             const nodeAddress = `0.0.0.0:${o[`shard${i}`]}`;
             const server = new grpc.Server();
-            const storageServer = new DummyStorageServer(l);
+            const storageServer = new DummyStorageServer(l, o['json']);
             server.addService(VerifierStorageService as ServiceDefinition<DummyStorageServer>, storageServer);
             server.addService(StorageNodeService as ServiceDefinition<DummyStorageServer>, storageServer);
             server.bind(nodeAddress, grpc.ServerCredentials.createInsecure());
