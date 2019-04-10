@@ -271,7 +271,7 @@ export class BlockGenerator {
                 if (((changes.hashedAddress[0] & 0xF0) >> 4) === i) {
                     const op = new UpdateOp();
                     // note this is the UNHASHED address. The storage unit is expected to re-hash it.
-                    op.setAccount(toBufferBE(account, 32));
+                    op.setAccount(toBufferBE(account, 20));
                     op.setBalance(toBufferBE(changes.balance, 32));
                     op.setNonce(Number(changes.nonce));
                     msg.addOperations(op);
