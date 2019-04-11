@@ -5,7 +5,7 @@ import { RlpList, RlpEncode, RlpDecode } from 'rlp-stream/build/src/rlp-stream';
 import { EthereumAccount, EthereumAccountFromBuffer } from './ethereumAccount';
 import { VerifierStorageClient, UpdateMsg, grpc, UpdateOp, StorageUpdate, TransactionReply, ErrorCode} from '@rainblock/protocol'
 import { MerklePatriciaTree, CachedMerklePatriciaTree, MerklePatriciaTreeOptions, MerklePatriciaTreeNode } from '@rainblock/merkle-patricia-tree';
-import { GethStateDump, GethStateDumpAccount } from './gethImport';
+import { GethStateDump, GethStateDumpAccount, ImportGethDump } from './gethImport';
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -226,7 +226,7 @@ export class BlockGenerator {
         }
         
         /** The miner gets to include their reward */
-
+        // This is a TODO
         const stateRoot = this.tree.rootHash;
 
         this.logger.debug(`Executed new block ${this.blockNumber} with new root ${stateRoot.toString(16)} using ${gasUsed} gas`);
@@ -328,17 +328,7 @@ export class BlockGenerator {
 
         this.logger.info(`Parent block set to ${this.parentHash.toString(16)}, block number ${genesisBlock.header.blockNumber}`);
 
-        const genesisJson = JSON.parse(await fs.promises.
-            readFile(path.join(this.options.configDir, this.options.config.genesisData), { encoding: 'utf8'} )) as GethStateDump;
-        for (const [id, account] of Object.entries(genesisJson.accounts)) {
-            // TODO: currently, this only supports accounts without storage
-            if (Object.entries(account.storage).length > 0) {
-                throw new Error('Genesis file with storage not yet supported');
-            }
-            // Parse the account so we can insert it into the tree.
-            const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), BigInt(`0x${account.codeHash}`), EthereumAccount.EMPTY_BUFFER_HASH);
-            this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount);
-        }
+        await ImportGethDump(path.join(this.options.configDir, this.options.config.genesisData), this.tree, new Map<bigint, Buffer>());
 
         // Apparently we need to manually call this
         this.tree.pruneStateCache();

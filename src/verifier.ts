@@ -1,4 +1,4 @@
-#!/usr/bin/env ts-node
+#!/usr/bin/env NODE_NO_WARNINGS=1 ts-node
 
 import * as program from 'caporal';
 import * as fs from 'fs';
@@ -17,8 +17,10 @@ import { EthereumTransaction, getPublicAddress, signTransaction, encodeBlock, CO
 import { EthereumAccount } from './ethereumAccount';
 import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
-import { GethStateDump } from './gethImport';
+import { GethStateDump, ImportGethDump } from './gethImport';
 import { ServiceDefinition } from 'grpc';
+
+process.env["NODE_NO_WARNINGS"] = "1";
 
 program.version('1').description('The rainblock verifier server')
     .command('serve', 'Start the verifier server')
@@ -185,12 +187,42 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
             nonce: 0n, // TODO: pick a valid nonce
             blockNumber: 0n
         }, [], []);
-        console.log(block);
         await fs.promises.writeFile(o['json'], JSON.stringify(json, null, 2), 'utf8');
         await fs.promises.writeFile(o['map'], JSON.stringify(map, null, 2), 'utf8');
         await fs.promises.writeFile(o['block'], block);
     });
 
+program.command('generate-trace', 'Generate a transaction trace file using the parameters given')
+    .option('--toAccounts <number>', 'Range of to accounts to send to (0 - <number>)', program.INTEGER, undefined, true)
+    .option('--fromAccountStart <number>', 'Range of from accounts to send from (<number> - end)', program.INTEGER, undefined, true)
+    .option('--fromAccountEnd <number>', 'Range of from accounts to send from (start - <number>)', program.INTEGER, undefined, true)
+    .option('--gasLimit <gas>', '<gas> each transaction may consume', program.INTEGER, 100000, true)
+    .option('--gasPrice <price>', '<price> to pay for gas consumed', program.INTEGER, 1, true)
+    .option('--value <amount>', '<amount> to transfer to the new account', program.INTEGER, 1, true)
+    .option('--transactions <number>', '<number> of transactions to include in the trace', program.INTEGER, undefined, true)
+    .option('--file <path>', '<path> to output file', program.STRING, undefined, true)
+    .action(async (a, o, l) => {
+        let transactions : RlpList[] = [];
+
+        for (let i = 0; i < o['transactions']; i++) {
+            const toAccountNum = Math.floor(Math.random() * o['toAccounts']) + 1; // random account between 1-toAccounts
+            const fromAccountNum = Math.floor(Math.random() * (o['fromAccountsEnd'] - o['fromAccountsStart'] + 1) + o['fromAccountsEnd']); // random account between fromAccountsStart - fromAccountsEnd
+
+            let transaction : EthereumTransaction  = {
+                gasLimit: BigInt(o['gasLimit']),
+                to: await getPublicAddress(BigInt(toAccountNum)),
+                data: Buffer.from([]),
+                nonce: BigInt(0), //
+                gasPrice: BigInt(o['gasPrice']),
+                value: BigInt(o['value']),
+                from: 0n // Discarded
+            }
+
+            transactions.push(signTransaction(transaction, BigInt(fromAccountNum)));
+        }
+
+        await fs.promises.writeFile(o['file'], RlpEncode(transactions));
+    });
 
 program.command('submit-tx', 'Submit a transaction using parameters given.')
     .option('--server <server>', 'Send transaction to <server>', program.STRING, 'localhost:9000')
@@ -226,16 +258,9 @@ program.command('submit-tx', 'Submit a transaction using parameters given.')
 
         // Generate the proof (for simple tx only)
         if (o['proof']) {
-            const tree = new MerklePatriciaTree();
-            const json = JSON.parse(await fs.promises.readFile(o['proofState'], { encoding: 'utf8'} )) as GethStateDump;
-            for (const [id, account] of Object.entries(json.accounts)) {
-                // TODO: currently, this only supports accounts without storage
-                if (Object.entries(account.storage).length > 0) {
-                    throw new Error('Proof state file with storage not yet supported');
-                }
-                const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), BigInt(`0x${account.codeHash}`), EthereumAccount.EMPTY_BUFFER_HASH);
-                tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount.toRlp());
-            }
+            const tree = new MerklePatriciaTree<Buffer, EthereumAccount>();
+            await ImportGethDump(o['proofState'], tree, new Map<bigint, Buffer>());
+
             const fromProof = tree.get(hashAsBuffer(HashType.KECCAK256, toBufferBE(await getPublicAddress(BigInt(`0x${keyPadded}`)), 20)));
             const toProof = tree.get(hashAsBuffer(HashType.KECCAK256, Buffer.from(toPadded, 'hex')));
 
@@ -254,7 +279,7 @@ program.command('submit-tx', 'Submit a transaction using parameters given.')
             if (o['proof']) {
                 const proofs = proof.map(p => p.getRlpNodeEncoding({
                     keyConverter: k => k as Buffer,
-                    valueConverter: v => v,
+                    valueConverter: v => v.toRlp(),
                     putCanDelete: false}));
                 const fullBytes = proofs.reduce((p, c, i) => p + c.length, 0);
                 l.debug(`Proofs total size: ${fullBytes}`);

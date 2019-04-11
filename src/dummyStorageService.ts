@@ -2,7 +2,7 @@ import {  IVerifierStorageServer,
     IStorageNodeServer,
     UpdateMsg, google_protobuf_empty_pb, grpc, CodeRequest, CodeReply, AccountRequest, AccountReply, StorageRequest, StorageReply, BlockHashRequest, BlockHashReply, RPCWitness} from '@rainblock/protocol'
 import { MerklePatriciaTree } from '@rainblock/merkle-patricia-tree/build/src';
-import { GethStateDump } from './gethImport';
+import { GethStateDump, ImportGethDump } from './gethImport';
 import { EthereumAccount } from './ethereumAccount';
 import { hashAsBigInt, hashAsBuffer, HashType, KeccakHasher } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
@@ -22,20 +22,11 @@ export class DummyStorageServer implements IVerifierStorageServer, IStorageNodeS
     constructor(private logger : Logger, genesisData?: string) {
 
         if (genesisData !== undefined) {
-        const genesisJson = JSON.parse(fs.
-            readFileSync(genesisData, { encoding: 'utf8'} )) as GethStateDump;
-            for (const [id, account] of Object.entries(genesisJson.accounts)) {
-                // TODO: currently, this only supports accounts without storage
-                if (Object.entries(account.storage).length > 0) {
-                    throw new Error('Genesis file with storage not yet supported');
-                }
-                // Parse the account so we can insert it into the tree.
-                const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), BigInt(`0x${account.codeHash}`), EthereumAccount.EMPTY_BUFFER_HASH);
-                this.tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount);
-            }
+            ImportGethDump(genesisData, this.tree, new Map<bigint, Buffer>())
+                .then(() => {
+                    this.logger.info(`Initialized state to stateRoot ${this.tree.rootHash.toString(16)}`);
+                });
         }
-
-        this.logger.info(`Initialized state to stateRoot ${this.tree.rootHash.toString(16)}`);
     }
 
     async getCodeInfo(call: grpc.ServerUnaryCall<CodeRequest>, 
