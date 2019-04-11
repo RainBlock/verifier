@@ -333,7 +333,7 @@ export class BlockGenerator {
         await ImportGethDump(path.join(this.options.configDir, this.options.config.genesisData), this.tree, new Map<bigint, Buffer>());
 
         // Apparently we need to manually call this
-        this.tree.pruneStateCache();
+        //this.tree.pruneStateCache();
 
         if (this.tree.rootHash != genesisBlock.header.stateRoot) {
             throw new Error(`Genesis root from block (${genesisBlock.header.stateRoot.toString(16)}) does not match imported root ${this.tree.rootHash.toString(16)}`)
