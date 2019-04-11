@@ -13,7 +13,7 @@ import { BlockGenerator } from './blockGenerator';
 import { ConfigurationFile } from './configFile';
 import { RlpDecoderTransform, RlpEncode, RlpDecode, RlpList } from 'rlp-stream/build/src/rlp-stream';
 import { CachedMerklePatriciaTree, MerklePatriciaTree } from '@rainblock/merkle-patricia-tree/build/src';
-import { EthereumTransaction, getPublicAddress, signTransaction, encodeBlock, CONTRACT_CREATION } from '@rainblock/ethereum-block';
+import { EthereumTransaction, getPublicAddress, signTransaction, encodeBlock, CONTRACT_CREATION, decodeTransaction } from '@rainblock/ethereum-block';
 import { EthereumAccount } from './ethereumAccount';
 import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
@@ -194,45 +194,44 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
 
 program.command('generate-trace', 'Generate a transaction trace file using the parameters given')
     .option('--toAccounts <number>', 'Range of to accounts to send to (0 - <number>)', program.INTEGER, undefined, true)
-    .option('--fromAccountStart <number>', 'Range of from accounts to send from (<number> - end)', program.INTEGER, undefined, true)
-    .option('--fromAccountEnd <number>', 'Range of from accounts to send from (start - <number>)', program.INTEGER, undefined, true)
+    .option('--fromAccountsStart <number>', 'Range of from accounts to send from (<number> - end)', program.INTEGER, undefined, true)
+    .option('--fromAccountsEnd <number>', 'Range of from accounts to send from (start - <number>)', program.INTEGER, undefined, true)
     .option('--gasLimit <gas>', '<gas> each transaction may consume', program.INTEGER, 100000, true)
     .option('--gasPrice <price>', '<price> to pay for gas consumed', program.INTEGER, 1, true)
     .option('--value <amount>', '<amount> to transfer to the new account', program.INTEGER, 1, true)
+    .option('--chain <id>', '<id> of the chain (0 for pre-EIP-155 semantics, 1 for mainnet)', program.INTEGER, 0)
     .option('--transactions <number>', '<number> of transactions to include in the trace', program.INTEGER, undefined, true)
     .option('--file <path>', '<path> to output file', program.STRING, undefined, true)
     .action(async (a, o, l) => {
-        let transactions : RlpList[] = [];
-
         const nonceMap = new Map<bigint, bigint>();
+        const ws = fs.createWriteStream(o['file']);
 
         for (let i = 0; i < o['transactions']; i++) {
-            const toAccountNum = Math.floor(Math.random() * o['toAccounts']) + 1; // random account between 1-toAccounts
-            const fromAccountNum = Math.floor(Math.random() * (o['fromAccountsEnd'] - o['fromAccountsStart'] + 1) + o['fromAccountsEnd']); // random account between fromAccountsStart - fromAccountsEnd
-
-            const addresses = await Promise.all([getPublicAddress(BigInt(toAccountNum)), 
-                getPublicAddress(BigInt(fromAccountNum))]);
-
-            const to = addresses[0];
-            const from = addresses[1];
+            const toAccountNum = BigInt(Math.floor(Math.random() * o['toAccounts']) + 1); // random account between 1-toAccounts
+            const fromAccountNum = BigInt(Math.floor(Math.random() * (o['fromAccountsEnd'] - o['fromAccountsStart'] + 1) + o['fromAccountsStart'])); // random account between fromAccountsStart - fromAccountsEnd
             
-            const nonce = nonceMap.has(from) ? nonceMap.get(from)! + 1n : 0n;
-            nonceMap.set(from, nonce); 
+            const to = await getPublicAddress(toAccountNum);
             
+            const nonce = nonceMap.has(fromAccountNum) ? nonceMap.get(fromAccountNum)! + 1n : 0n;
+            nonceMap.set(fromAccountNum, nonce); 
+
             let transaction : EthereumTransaction  = {
                 gasLimit: BigInt(o['gasLimit']),
                 to,
                 data: Buffer.from([]),
-                nonce: BigInt(0), //
+                nonce,
                 gasPrice: BigInt(o['gasPrice']),
                 value: BigInt(o['value']),
                 from: 0n // Discarded
             }
+            
+            const signedTx = signTransaction(transaction, fromAccountNum, o['chain']);
+            const rlp = RlpEncode(signedTx);
 
-            transactions.push(signTransaction(transaction, from));
+            ws.write(rlp);
         }
 
-        await fs.promises.writeFile(o['file'], RlpEncode(transactions));
+        ws.close();
     });
 
 program.command('submit-tx', 'Submit a transaction using parameters given.')

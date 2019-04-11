@@ -13,6 +13,8 @@ import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
 import { ServiceError } from 'grpc';
 
+const MAX_256_UNSIGNED = 115792089237316195423570985008687907853269984665640564039457584007913129639935n;
+
 export interface BlockGeneratorOptions {
     /** The maximum amount of time the proof of work puzzle takes to solve */
     proofOfWorkTime: number;
@@ -166,7 +168,7 @@ export class BlockGenerator {
                     if (!this.options.config.generateFromAccounts) {
                         throw new Error(`From account ${tx.tx.from.toString(16)} does not exist!`);
                     } else {
-                        fromAccount = new EthereumAccount(tx.tx.nonce, 500000000000n, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
+                        fromAccount = new EthereumAccount(tx.tx.nonce, MAX_256_UNSIGNED, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
                     }
                 } 
 
