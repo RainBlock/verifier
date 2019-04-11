@@ -204,13 +204,24 @@ program.command('generate-trace', 'Generate a transaction trace file using the p
     .action(async (a, o, l) => {
         let transactions : RlpList[] = [];
 
+        const nonceMap = new Map<bigint, bigint>();
+
         for (let i = 0; i < o['transactions']; i++) {
             const toAccountNum = Math.floor(Math.random() * o['toAccounts']) + 1; // random account between 1-toAccounts
             const fromAccountNum = Math.floor(Math.random() * (o['fromAccountsEnd'] - o['fromAccountsStart'] + 1) + o['fromAccountsEnd']); // random account between fromAccountsStart - fromAccountsEnd
 
+            const addresses = await Promise.all([getPublicAddress(BigInt(toAccountNum)), 
+                getPublicAddress(BigInt(fromAccountNum))]);
+
+            const to = addresses[0];
+            const from = addresses[1];
+            
+            const nonce = nonceMap.has(from) ? nonceMap.get(from)! + 1n : 0n;
+            nonceMap.set(from, nonce); 
+            
             let transaction : EthereumTransaction  = {
                 gasLimit: BigInt(o['gasLimit']),
-                to: await getPublicAddress(BigInt(toAccountNum)),
+                to,
                 data: Buffer.from([]),
                 nonce: BigInt(0), //
                 gasPrice: BigInt(o['gasPrice']),
@@ -218,7 +229,7 @@ program.command('generate-trace', 'Generate a transaction trace file using the p
                 from: 0n // Discarded
             }
 
-            transactions.push(signTransaction(transaction, BigInt(fromAccountNum)));
+            transactions.push(signTransaction(transaction, from));
         }
 
         await fs.promises.writeFile(o['file'], RlpEncode(transactions));
