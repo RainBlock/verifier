@@ -88,7 +88,7 @@ export class BlockGenerator {
     private tree : CachedMerklePatriciaTree<Buffer, EthereumAccount>;
     private verifiers : VerifierStorageClient[];
 
-    private txQueue = new Map<bigint, TransactionData>();
+    private txQueue : TransactionData[] = [];
 
     constructor(private logger: Logger, public options : BlockGeneratorOptions, public running: boolean = true) {
         this.blockNumber = 0n;
@@ -109,7 +109,7 @@ export class BlockGenerator {
 
     /** Queue a new transaction to be included in the next block. */
     addTransaction(hash: bigint, data: TransactionData) {
-        this.txQueue.set(hash, data);
+        this.txQueue.push(data);
     }
 
     /** 'Simulate' solving the proof of work puzzle. We'll solve it by delaying its execution */
@@ -147,15 +147,16 @@ export class BlockGenerator {
     }
 
     /** Order and execute the given transaction map. */
-    async orderAndExecuteTransactions(transactions : Map<bigint, TransactionData>) : Promise<ExecutionResult> {
+    async orderAndExecuteTransactions(transactions : TransactionData[]) : Promise<ExecutionResult> {
         const order : TransactionData[] = [];
         const writeSet = new Map<bigint, WriteSetChanges>();
 
         const start = process.hrtime.bigint();
         let gasUsed = 0n;
-
-        for (const [txHash, tx] of transactions.entries()) {
-            this.logger.debug(`Processing tx ${txHash.toString(16)}`);
+        let i = 0;
+        for (const tx of transactions) {
+            i++;
+            this.logger.debug(`Processing tx ${tx.txHash.toString(16)}`);
 
             try {
                 // First, verify that the FROM account can be found and the
@@ -178,13 +179,13 @@ export class BlockGenerator {
 
                 // TODO: handle code creation (tx.to == CONTRACT_CREATION)
                 if (tx.tx.to === CONTRACT_CREATION) {
-                    throw new Error(`tx ${txHash.toString(16)} CONTRACT_CREATION, but CONTRACT_CREATION not yet supported`);
+                    throw new Error(`tx ${tx.txHash.toString(16)} CONTRACT_CREATION, but CONTRACT_CREATION not yet supported`);
                 }
 
                 const toAccount = this.tree.getFromCache(tx.toHash, tx.proofs);
                 if (toAccount === null) {
                     // This means we're going to CREATE this account.
-                    this.logger.debug(`tx ${txHash.toString(16)} create new account ${tx.tx.to.toString(16)}`);
+                    this.logger.debug(`tx ${tx.txHash.toString(16)} create new account ${tx.tx.to.toString(16)}`);
 
                     // TODO: check if account actually has enough funds?
                     const newAccount = new EthereumAccount(0n, tx.tx.value, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
@@ -199,7 +200,7 @@ export class BlockGenerator {
                         this.logger.warn(`To account ${tx.tx.to.toString(16)} Code execution not yet implemented`);
                     } else {
                         // Simple transfer
-                        this.logger.debug(`tx ${txHash.toString(16)} transfer ${tx.tx.value.toString(16)} wei from ${tx.tx.from.toString(16)} -> ${tx.tx.to.toString(16)}`);
+                        this.logger.debug(`tx ${tx.txHash.toString(16)} transfer ${tx.tx.value.toString(16)} wei from ${tx.tx.from.toString(16)} -> ${tx.tx.to.toString(16)}`);
                         
                         // TODO : accumulate at -end- to avoid repeats
                         // Need our own non-proto format.
@@ -217,10 +218,10 @@ export class BlockGenerator {
 
             } catch (e) {
                 if (e instanceof Error) {
-                  this.logger.info(`Skipping tx ${txHash.toString(16)} due to ${e.message}`);
+                  this.logger.info(`Skipping tx ${tx.txHash.toString(16)} due to ${e.message}`);
                   this.logger.debug(e.stack!);
                 } else {
-                  this.logger.info(`Skipping tx ${txHash.toString(16)} due to ${e}`);
+                  this.logger.info(`Skipping tx ${tx.txHash.toString(16)} due to ${e}`);
                 }
 
                 tx.errorCode = ErrorCode.ERROR_CODE_INVALID;
@@ -333,7 +334,7 @@ export class BlockGenerator {
         await ImportGethDump(path.join(this.options.configDir, this.options.config.genesisData), this.tree, new Map<bigint, Buffer>());
 
         // Apparently we need to manually call this
-        //this.tree.pruneStateCache();
+        this.tree.pruneStateCache();
 
         if (this.tree.rootHash != genesisBlock.header.stateRoot) {
             throw new Error(`Genesis root from block (${genesisBlock.header.stateRoot.toString(16)}) does not match imported root ${this.tree.rootHash.toString(16)}`)
@@ -344,9 +345,9 @@ export class BlockGenerator {
     }
 
     /** Reply to clients with the result of the operations */
-    async replyToClients(transactions: Map<bigint, TransactionData>) {
+    async replyToClients(transactions: TransactionData[]) {
         const replyPromises = [];
-        for (const [id, tx] of transactions) {
+        for (const tx of transactions) {
             const reply = new TransactionReply();
             reply.setCode(tx.errorCode === undefined ? ErrorCode.ERROR_CODE_INVALID : tx.errorCode);
             replyPromises.push(new Promise((resolve, reject) => {
@@ -376,8 +377,8 @@ export class BlockGenerator {
         while (this.running) {
             // Take transactions off of the queue to be included into the new block
             const blockTransactions = this.txQueue;
-            this.txQueue = new Map<bigint, TransactionData>();
-            this.logger.info(`Assembling new block ${this.blockNumber.toString()} with ${blockTransactions.size} txes`);
+            this.txQueue = [];
+            this.logger.info(`Assembling new block ${this.blockNumber.toString()} with ${blockTransactions.length} txes`);
 
             // Decide on which transactions will be included in the block, order and execute them.
             const executionResult = await this.orderAndExecuteTransactions(blockTransactions);

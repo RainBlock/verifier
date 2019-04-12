@@ -19,6 +19,7 @@ import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
 import { GethStateDump, ImportGethDump } from './gethImport';
 import { ServiceDefinition } from 'grpc';
+import { EventEmitter } from 'events';
 
 process.env["NODE_NO_WARNINGS"] = "1";
 
@@ -105,6 +106,7 @@ program.command('test-transaction-list', 'Send a list of test transactions')
     .option('--server <server>', 'Send transaction to <server>', program.STRING, 'localhost:9000')
     .option('--txdata <tx-path>', 'Path to file with transaction data list', program.STRING, undefined, true)
     .option('--repeat', 'Whether or not to keep sending over and over again', program.BOOLEAN)
+    .option('--concurrency <level>', 'Number of concurrent requests to <level> ', program.INTEGER, 10000)
     .option('--noreply', 'Do not wait for the reply', program.BOOLEAN)
     .action(async (a, o, l) => {
         do {
@@ -114,12 +116,13 @@ program.command('test-transaction-list', 'Send a list of test transactions')
             const decoder = new RlpDecoderTransform();
             data.pipe(decoder);
     
-            const promises = [];
+            let promises = [];
             const start = process.hrtime.bigint();
+            let i = 0;
             for await (const tx of decoder) {
                 request.setTransaction(RlpEncode(tx));
                 const promise = new Promise((resolve, reject) => {
-                    client.submitTransaction(request, (err: any, reply: TransactionReply) => {
+                    const l = client.submitTransaction(request, (err: any, reply: TransactionReply) => {
                     if (err) {
                         reject();
                     } else {
@@ -128,10 +131,16 @@ program.command('test-transaction-list', 'Send a list of test transactions')
                 });
                 });
                 promises.push(promise);
+                if (!o['noreply'] && promises.length > o['concurrency']) {
+                    await Promise.all(promises);
+                    promises = [];
+                }
             }
+
             if (!o['noreply']) {
                 await Promise.all(promises);
             }
+
             const end = process.hrtime.bigint();
             const total = end - start;
             l.info(`Processed ${promises.length} txes in ${total} ns (${total/BigInt(promises.length)} ns/op)`);
