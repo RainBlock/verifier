@@ -20,6 +20,7 @@ import { toBufferBE, toBigIntBE } from 'bigint-buffer';
 import { GethStateDump, ImportGethDump } from './gethImport';
 import { ServiceDefinition } from 'grpc';
 import { EventEmitter } from 'events';
+import { NetworkLearner } from './networkLearner';
 
 process.env["NODE_NO_WARNINGS"] = "1";
 
@@ -27,9 +28,15 @@ program.version('1').description('The rainblock verifier server')
     .command('serve', 'Start the verifier server')
     .option('--port <port-number>', 'Serve on <port-number>.', program.INTEGER, 9000)
     .option('--config <path>', 'The <path> to the configurtion file', program.STRING, path.join(__dirname, '../sample/config.yml'))
+    .option('--beneficiary <address>', 'The <address> of the beneficiary. If set, overrides any beneficary set in the config.', program.STRING)
     .option('--pow <time>', 'The maximum <time> in ms the proof of work puzzle takes to solve', program.INTEGER, 12000)
     .action(async (a, o, l) => {
         let config = yaml.safeLoad(await fs.promises.readFile(o['config'], "utf8")) as ConfigurationFile;
+
+        if (o['beneficiary']) {
+            config.beneficiary = o['beneficiary'];
+        }
+
         const server = new grpc.Server();
         const generator = new BlockGenerator(l, {
             proofOfWorkTime: o['pow'],
@@ -41,7 +48,9 @@ program.version('1').description('The rainblock verifier server')
         server.bind(`0.0.0.0:${o['port']}`, grpc.ServerCredentials.createInsecure());
         server.start();
 
-        l.info(`Serving on port ${o['port']}`);
+        const learner = new NetworkLearner(config);
+
+        l.info(`Serving on port ${o['port']} as beneficiary ${config.beneficiary}`);
 
         try {
             await generator.generate();

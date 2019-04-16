@@ -1,4 +1,4 @@
-import {  TransactionRequest, TransactionReply, IVerifierServer, ErrorCode, grpc} from '@rainblock/protocol'
+import {  TransactionRequest, TransactionReply, IVerifierServer, ErrorCode, grpc, VerifierVerifierHandshakeMessage, MerkleNodeAdvertisement, BlockAdvertisement, NeighborAdvertisement} from '@rainblock/protocol'
 import { decodeTransaction, CONTRACT_CREATION } from '@rainblock/ethereum-block'
 import { RlpDecode, RlpList } from 'rlp-stream';
 import { BlockGenerator, AccountUpdates } from './blockGenerator';
@@ -11,6 +11,23 @@ export class VerifierServer implements IVerifierServer {
     constructor(private logger: Logger, private blockGenerator : BlockGenerator,
         // The tree is just for decoding nodes
         private tree = new CachedMerklePatriciaTree<Buffer, EthereumAccount>()) {
+    }
+
+    async verifierVerifierHandshake(call : grpc.ServerUnaryCall<VerifierVerifierHandshakeMessage>,
+        callback: grpc.sendUnaryData<VerifierVerifierHandshakeMessage>) {
+            
+    }
+
+    async advertiseNode(call: grpc.ServerDuplexStream<MerkleNodeAdvertisement, MerkleNodeAdvertisement>) {
+
+    }
+
+    async advertiseBlock(call: grpc.ServerDuplexStream<BlockAdvertisement, BlockAdvertisement>) {
+
+    }
+
+    async advertiseNeighbor(call: grpc.ServerDuplexStream<NeighborAdvertisement, NeighborAdvertisement>) {
+
     }
 
     /** Submit a transaction from the client to the verifier. */

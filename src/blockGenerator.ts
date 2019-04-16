@@ -135,7 +135,7 @@ export class BlockGenerator {
         });
     }
 
-    updateWriteSet(writeSet: Map<bigint, WriteSetChanges>, address: bigint, hashedAddress : Buffer, account: EthereumAccount) {
+    updateWriteSet(writeSet: Map<bigint, WriteSetChanges>, address: bigint, hashedAddress : Buffer, account: EthereumAccount, usedNodes: Set<bigint>, nodeBag: Map<bigint, MerklePatriciaTreeNode<EthereumAccount>>) {
         writeSet.set(address, {
             hashedAddress,
             nonce: account.nonce,
@@ -143,14 +143,14 @@ export class BlockGenerator {
         })
 
         // TODO: defer update tree until end
-        this.tree.put(hashedAddress, account);
+        this.tree.putWithNodeBag(hashedAddress, account, usedNodes, nodeBag);
     }
 
     /** Order and execute the given transaction map. */
     async orderAndExecuteTransactions(transactions : TransactionData[]) : Promise<ExecutionResult> {
         const order : TransactionData[] = [];
         const writeSet = new Map<bigint, WriteSetChanges>();
-
+        const nodesUsed = new Set<bigint>();
         const start = process.hrtime.bigint();
         let gasUsed = 0n;
         let i = 0;
@@ -163,7 +163,7 @@ export class BlockGenerator {
                 // nonce in the transaction is one greater than the account
                 // nonce.
                 let fromAccount = 
-                    this.tree.getFromCache(tx.fromHash, tx.proofs);
+                    this.tree.getFromCache(tx.fromHash, nodesUsed, tx.proofs);
 
                 if (fromAccount === null) {
                     if (!this.options.config.generateFromAccounts) {
@@ -182,7 +182,7 @@ export class BlockGenerator {
                     throw new Error(`tx ${tx.txHash.toString(16)} CONTRACT_CREATION, but CONTRACT_CREATION not yet supported`);
                 }
 
-                const toAccount = this.tree.getFromCache(tx.toHash, tx.proofs);
+                const toAccount = this.tree.getFromCache(tx.toHash, nodesUsed, tx.proofs);
                 if (toAccount === null) {
                     // This means we're going to CREATE this account.
                     this.logger.debug(`tx ${tx.txHash.toString(16)} create new account ${tx.tx.to.toString(16)}`);
@@ -192,8 +192,8 @@ export class BlockGenerator {
                     fromAccount.nonce += 1n;
                     fromAccount.balance -= tx.tx.value;
                     
-                    this.updateWriteSet(writeSet, tx.tx.to, tx.toHash, newAccount);
-                    this.updateWriteSet(writeSet, tx.tx.from, tx.fromHash, fromAccount);
+                    this.updateWriteSet(writeSet, tx.tx.to, tx.toHash, newAccount, nodesUsed, tx.proofs);
+                    this.updateWriteSet(writeSet, tx.tx.from, tx.fromHash, fromAccount, nodesUsed, tx.proofs);
                 } else {
                     if (toAccount.hasCode()) {
                         // TODO: execute code
@@ -208,8 +208,8 @@ export class BlockGenerator {
                         fromAccount.balance -= tx.tx.value;
                         toAccount.balance += tx.tx.value;
 
-                        this.updateWriteSet(writeSet, tx.tx.to, tx.toHash, toAccount);
-                        this.updateWriteSet(writeSet, tx.tx.from, tx.fromHash, fromAccount);
+                        this.updateWriteSet(writeSet, tx.tx.to, tx.toHash, toAccount, nodesUsed, tx.proofs);
+                        this.updateWriteSet(writeSet, tx.tx.from, tx.fromHash, fromAccount, nodesUsed, tx.proofs);
                     }
                 }
 

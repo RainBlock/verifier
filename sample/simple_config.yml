@@ -35,6 +35,8 @@ storage:
     - 'localhost:9114'
   15:
     - 'localhost:9115'
+verifiers:
+  
 rpc: 
   storageTimeout: 5000
 beneficiary: 'ea674fdde714fd979de3edf0f56aa9716b898ec8'
