@@ -6,6 +6,7 @@ import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { CachedMerklePatriciaTree, MerklePatriciaTreeNode } from '@rainblock/merkle-patricia-tree';
 import { EthereumAccount, EthereumAccountFromBuffer } from './ethereumAccount';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
+
 export class VerifierServer implements IVerifierServer {
 
     constructor(private logger: Logger, private blockGenerator : BlockGenerator,
@@ -15,7 +16,11 @@ export class VerifierServer implements IVerifierServer {
 
     async verifierVerifierHandshake(call : grpc.ServerUnaryCall<VerifierVerifierHandshakeMessage>,
         callback: grpc.sendUnaryData<VerifierVerifierHandshakeMessage>) {
-            
+
+        let handshakeReply = new VerifierVerifierHandshakeMessage();
+        handshakeReply.setProtocolVersion(require('@rainblock/protocol/package.json').version);
+        handshakeReply.setVersion(require('package.json').version);
+        callback(null, handshakeReply);
     }
 
     async advertiseNode(call: grpc.ServerDuplexStream<MerkleNodeAdvertisement, MerkleNodeAdvertisement>) {

@@ -4,7 +4,7 @@ import { encodeBlock, encodeHeaderAsRLP } from '@rainblock/ethereum-block'
 import { RlpList, RlpEncode, RlpDecode } from 'rlp-stream/build/src/rlp-stream';
 import { EthereumAccount, EthereumAccountFromBuffer } from './ethereumAccount';
 import { VerifierStorageClient, UpdateMsg, grpc, UpdateOp, StorageUpdate, TransactionReply, ErrorCode} from '@rainblock/protocol'
-import { MerklePatriciaTree, CachedMerklePatriciaTree, MerklePatriciaTreeOptions, MerklePatriciaTreeNode } from '@rainblock/merkle-patricia-tree';
+import { MerklePatriciaTree, CachedMerklePatriciaTree, MerklePatriciaTreeOptions, MerklePatriciaTreeNode, MerkleKeyNotFoundError } from '@rainblock/merkle-patricia-tree';
 import { GethStateDump, GethStateDumpAccount, ImportGethDump } from './gethImport';
 
 import * as fs from 'fs';
@@ -162,16 +162,24 @@ export class BlockGenerator {
                 // First, verify that the FROM account can be found and the
                 // nonce in the transaction is one greater than the account
                 // nonce.
-                let fromAccount = 
-                    this.tree.getFromCache(tx.fromHash, nodesUsed, tx.proofs);
-
-                if (fromAccount === null) {
-                    if (!this.options.config.generateFromAccounts) {
-                        throw new Error(`From account ${tx.tx.from.toString(16)} does not exist!`);
+                let fromAccount : EthereumAccount;
+                try {
+                    fromAccount = 
+                        this.tree.getFromCache(tx.fromHash, nodesUsed, tx.proofs);
+                } catch (e) {
+                    // TODO: remove nested try-catch
+                    if (e instanceof MerkleKeyNotFoundError) {
+                        // Generate the account if it doesn't exist
+                        if (this.options.config.generateFromAccounts) {
+                            fromAccount = new EthereumAccount(tx.tx.nonce, MAX_256_UNSIGNED, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
+                        } else {
+                            throw new Error(`From account ${tx.tx.from.toString(16)} does not exist!`);
+                        }
                     } else {
-                        fromAccount = new EthereumAccount(tx.tx.nonce, MAX_256_UNSIGNED, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
+                        // Pruned tree encountered, we can't proceed
+                        throw e;
                     }
-                } 
+                }
 
                 if (!this.options.config.disableNonceCheck && tx.tx.nonce !== fromAccount.nonce) {
                     throw new Error(`From account ${tx.tx.from.toString(16)} had incorrect nonce ${fromAccount.nonce}, expected ${tx.tx.nonce}`);
