@@ -220,7 +220,10 @@ program.command('generate-trace', 'Generate a transaction trace file using the p
     .option('--chain <id>', '<id> of the chain (0 for pre-EIP-155 semantics, 1 for mainnet)', program.INTEGER, 0)
     .option('--transactions <number>', '<number> of transactions to include in the trace', program.INTEGER, undefined, true)
     .option('--file <path>', '<path> to output file', program.STRING, undefined, true)
+    .option('--contract <contract>', 'A contract from ["omg", "bittrex", "etherdelta"] for the transaction to call', program.STRING, undefined, false)
     .action(async (a, o, l) => {
+        
+
         const nonceMap = new Map<bigint, bigint>();
         const ws = fs.createWriteStream(o['file']);
 
@@ -228,18 +231,75 @@ program.command('generate-trace', 'Generate a transaction trace file using the p
             const toAccountNum = BigInt(Math.floor(Math.random() * o['toAccounts']) + 1); // random account between 1-toAccounts
             const fromAccountNum = BigInt(Math.floor(Math.random() * (o['fromAccountsEnd'] - o['fromAccountsStart'] + 1) + o['fromAccountsStart'])); // random account between fromAccountsStart - fromAccountsEnd
             
-            const to = await getPublicAddress(toAccountNum);
+            var to = await getPublicAddress(toAccountNum);
+            var value = BigInt(o['value']);
             
             const nonce = nonceMap.has(fromAccountNum) ? nonceMap.get(fromAccountNum)! + 1n : 0n;
             nonceMap.set(fromAccountNum, nonce); 
+        
+            var txnData = Buffer.from([]);
+            if (o['contract']) {
+                switch(o['contract']) {
+                    case "omg":
+                        var addr1 = to;
+                        value = BigInt(0); // Txn value for this contract must be 0
+
+                        const contractvalue = BigInt(Math.floor(Math.random() * 10000 + 1));
+                        var valueStr = contractvalue.toString(16);
+                        // Pad valueStr with zeroes
+                        while (valueStr.length < 64) {
+                            valueStr = '0' + valueStr;
+                        }
+                        var addr1Str = addr1.toString(16);
+                        // Pad with zeroes
+                        while (addr1Str.length < 64) {
+                            addr1Str = '0' + addr1Str;
+                        }
+                        // This is the Ethereum address of the OMGToken contract
+                        to = BigInt('0xd26114cd6EE289AccF82350c8d8487fedB8A0C07');
+                        // This is how to construct the ABI call for the `transfer` function in
+                        // the OMG contract, which consists of a target addr and a value
+                        txnData = Buffer.from('a9059cbb' + addr1Str + valueStr, 'hex');
+                        break;
+                    case "bittrex":
+                        value = BigInt(Math.floor(Math.random() * 10000 + 1));
+                        var addr1 = to;
+                        const anotherAddr = BigInt(Math.floor(Math.random() * (o['fromAccountsEnd'] - o['fromAccountsStart'] + 1) + o['fromAccountsStart']));
+                        var addr2 = await getPublicAddress(anotherAddr);
+
+                        var addr1Str = addr1.toString(16);
+                        // Pad with zeroes
+                        while (addr1Str.length < 64) {
+                            addr1Str = '0' + addr1Str;
+                        }
+                        var addr2Str = addr2.toString(16);
+                        // Pad with zeroes
+                        while (addr2Str.length < 64) {
+                            addr2Str = '0' + addr2Str;
+                        }
+                        // This is the Ethereum address of the BittrexToken contract
+                        to = BigInt('0xE94b04a0FeD112f3664e45adb2B8915693dD5FF3');
+                        // This is how to construct the ABI call for the `split` function in
+                        // the Bittrex contract, which consists of 2 addr parameters
+                        txnData = Buffer.from('0f2c9329' + addr1Str + addr2Str, 'hex');
+                        console.log(txnData.toString('hex'));
+                        break;
+                    case "etherdelta":
+                        console.log("Oops, etherdelta contract not implemented yet");
+                        break;
+                    default:
+                        console.log("Provided invalid contract name");
+                        return;
+                }
+            }
 
             let transaction : EthereumTransaction  = {
                 gasLimit: BigInt(o['gasLimit']),
                 to,
-                data: Buffer.from([]),
+                data: txnData,
                 nonce,
                 gasPrice: BigInt(o['gasPrice']),
-                value: BigInt(o['value']),
+                value: value,
                 from: 0n // Discarded
             }
             
