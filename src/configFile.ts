@@ -17,6 +17,8 @@ export interface ConfigurationFile {
     generateFromAccounts? : boolean;
     /** Pruning depth for the cached merkle tree */
     pruneDepth? : number;
+    /** True, if transactions for the same block share a "big" node bag */
+    shareBag?: boolean;
 }
 
 /** RPC settings */

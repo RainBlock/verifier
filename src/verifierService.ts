@@ -25,7 +25,6 @@ export class VerifierServer implements IVerifierServer {
         
         handshakeReply.setProtocolVersion(require('@rainblock/protocol/package.json').version);
         handshakeReply.setVersion(require('package.json').version);
-        handshakeReply.setBeneficiary()
 
         callback(null, handshakeReply);
     }
