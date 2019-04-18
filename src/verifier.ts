@@ -8,7 +8,7 @@ import * as yaml from 'js-yaml';
 
 import { VerifierServer } from './verifierService';
 import { DummyStorageServer } from './dummyStorageService';
-import { VerifierService, VerifierClient, TransactionRequest, TransactionReply, StorageNodeService, VerifierStorageService, grpc } from '@rainblock/protocol'
+import { IVerifierServer, VerifierService, VerifierClient, TransactionRequest, TransactionReply, StorageNodeService, VerifierStorageService, grpc } from '@rainblock/protocol'
 import { BlockGenerator } from './blockGenerator';
 import { ConfigurationFile } from './configFile';
 import { RlpDecoderTransform, RlpEncode, RlpDecode, RlpList } from 'rlp-stream/build/src/rlp-stream';
@@ -21,6 +21,7 @@ import { GethStateDump, ImportGethDump } from './gethImport';
 import { ServiceDefinition } from 'grpc';
 import { EventEmitter } from 'events';
 import { NetworkLearner } from './networkLearner';
+import { IVerifierService } from '@rainblock/protocol/generated/verifier_grpc_pb';
 
 process.env["NODE_NO_WARNINGS"] = "1";
 

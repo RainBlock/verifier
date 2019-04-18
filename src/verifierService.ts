@@ -14,17 +14,24 @@ export class VerifierServer implements IVerifierServer {
         private tree = new CachedMerklePatriciaTree<Buffer, EthereumAccount>()) {
     }
 
+    // mapping from peer to <> id
+    // todo: needs cleanup
+    private mapping = new Map<string, bigint>();
+
     async verifierVerifierHandshake(call : grpc.ServerUnaryCall<VerifierVerifierHandshakeMessage>,
         callback: grpc.sendUnaryData<VerifierVerifierHandshakeMessage>) {
 
         let handshakeReply = new VerifierVerifierHandshakeMessage();
+        
         handshakeReply.setProtocolVersion(require('@rainblock/protocol/package.json').version);
         handshakeReply.setVersion(require('package.json').version);
+        handshakeReply.setBeneficiary()
+
         callback(null, handshakeReply);
     }
 
     async advertiseNode(call: grpc.ServerDuplexStream<MerkleNodeAdvertisement, MerkleNodeAdvertisement>) {
-
+        
     }
 
     async advertiseBlock(call: grpc.ServerDuplexStream<BlockAdvertisement, BlockAdvertisement>) {

@@ -413,6 +413,9 @@ export class BlockGenerator {
             this.parentHash = await this.proposeBlock(header, executionResult);
             this.logger.info(`New block ${this.parentHash.toString(16)} successfully proposed, adopting as parent`);
             this.blockNumber++;
+
+            // Prune the state cache.
+            this.tree.pruneStateCache();
         }
     }
 }
