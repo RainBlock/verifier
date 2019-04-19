@@ -23,8 +23,12 @@ export interface ConfigurationFile {
 
 /** RPC settings */
 export interface RpcSettings {
-    /** Timeout for storage node RPCs */
+    /** Timeout for storage node RPCs in ms */
     storageTimeout: number;
+    /** Timeout for verifier-verifier RPCs in ms*/
+    verifierTimeout : number;
+    /** Rescan interval for verifier-verifier communication in ms */
+    rescanInterval : number;
 }
 
 /** The list of storage nodes */

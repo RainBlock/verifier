@@ -30,6 +30,11 @@ export class EthereumAccount {
     hasCode() {
         return this.codeHash !== EthereumAccount.EMPTY_STRING_HASH;
     }
+
+    /** Explicitly create a deep copy of the account */
+    copy() {
+        return new EthereumAccount(this.nonce, this.balance, this.codeHash, this.storageRoot);
+    }
 }
 
 export function EthereumAccountFromBuffer(buf : Buffer) {

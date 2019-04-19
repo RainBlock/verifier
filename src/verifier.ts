@@ -31,6 +31,7 @@ program.version('1').description('The rainblock verifier server')
     .option('--config <path>', 'The <path> to the configurtion file', program.STRING, path.join(__dirname, '../sample/config.yml'))
     .option('--beneficiary <address>', 'The <address> of the beneficiary. If set, overrides any beneficary set in the config.', program.STRING)
     .option('--pow <time>', 'The maximum <time> in ms the proof of work puzzle takes to solve', program.INTEGER, 12000)
+    .option('--wait', 'Wait to connect to all verifiers before generating blocks', program.BOOLEAN)
     .action(async (a, o, l) => {
         let config = yaml.safeLoad(await fs.promises.readFile(o['config'], "utf8")) as ConfigurationFile;
 
@@ -39,19 +40,28 @@ program.version('1').description('The rainblock verifier server')
         }
 
         const server = new grpc.Server();
+
+
+
+        const learner = new NetworkLearner(l, config);
         const generator = new BlockGenerator(l, {
             proofOfWorkTime: o['pow'],
             config,
             configDir: path.dirname(o['config'])
-        });
+        }, learner);
 
-        server.addService(VerifierService, new VerifierServer(l, generator));
+        server.addService(VerifierService, new VerifierServer(l, config, generator));
         server.bind(`0.0.0.0:${o['port']}`, grpc.ServerCredentials.createInsecure());
         server.start();
 
-        const learner = new NetworkLearner(config);
-
         l.info(`Serving on port ${o['port']} as beneficiary ${config.beneficiary}`);
+
+        learner.startLearning();
+
+        // If we need to wait for all neighbors
+        if (o['wait']) {
+            await learner.waitForAllNeighbors();
+        }
 
         try {
             await generator.generate();

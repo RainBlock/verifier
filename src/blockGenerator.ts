@@ -1,4 +1,4 @@
-import { EthereumHeader, decodeBlock, EthereumTransaction, CONTRACT_CREATION } from '@rainblock/ethereum-block'
+import { EthereumHeader, decodeBlock, EthereumTransaction, CONTRACT_CREATION, EthereumBlock } from '@rainblock/ethereum-block'
 import { ConfigurationFile } from './configFile';
 import { encodeBlock, encodeHeaderAsRLP } from '@rainblock/ethereum-block'
 import { RlpList, RlpEncode, RlpDecode } from 'rlp-stream/build/src/rlp-stream';
@@ -12,6 +12,7 @@ import * as path from 'path';
 import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
 import { ServiceError } from 'grpc';
+import { NetworkLearner } from './networkLearner';
 
 const MAX_256_UNSIGNED = 115792089237316195423570985008687907853269984665640564039457584007913129639935n;
 
@@ -73,6 +74,7 @@ interface ExecutionResult {
 /** Per account write set changes. */
 interface WriteSetChanges {
     hashedAddress: Buffer;
+    account: EthereumAccount;
     balance: bigint;
     nonce: bigint;
 }
@@ -85,12 +87,15 @@ export class BlockGenerator {
     private difficulty: bigint;
     private gasLimit : bigint;
     private beneficiary : bigint;
+    private learnedNodes : Map<bigint, MerklePatriciaTreeNode<EthereumAccount>> = new Map();
     private tree : CachedMerklePatriciaTree<Buffer, EthereumAccount>;
     private verifiers : VerifierStorageClient[];
+    private blockResolver : (b : EthereumBlock) => void =  () => {};
 
     private txQueue : TransactionData[] = [];
 
-    constructor(private logger: Logger, public options : BlockGeneratorOptions, public running: boolean = true) {
+    constructor(private logger: Logger, public options : BlockGeneratorOptions, public networkLearner: NetworkLearner,
+         public running: boolean = true) {
         this.blockNumber = 0n;
         this.parentHash = 0n;
         this.difficulty = 0n;
@@ -135,9 +140,36 @@ export class BlockGenerator {
         });
     }
 
+    getAccount(writeSet: Map<bigint, WriteSetChanges>, unhashed: bigint, hashedAddress: Buffer, nodeBag: Map<bigint,MerklePatriciaTreeNode<EthereumAccount>>, nodesUsed: Set<bigint>,
+        generate = false, generateNonce = 0n) : EthereumAccount {
+            // First, check if we have it in our optimistic change set
+            let optimisticData = writeSet.get(unhashed);
+            if (optimisticData !== undefined) {
+                return optimisticData.account;
+            }
+
+            // Otherwise, fetch it from the tree, generating a copy
+            try {
+                return this.tree.getFromCache(hashedAddress, nodesUsed, nodeBag).copy();
+            } catch (e) {
+                if (e instanceof MerkleKeyNotFoundError) {
+                    // Generate the account if it doesn't exist
+                    if (generate) {
+                        return new EthereumAccount(generateNonce, MAX_256_UNSIGNED, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
+                    } else {
+                        throw new Error(`Account ${unhashed.toString(16)} does not exist!`);
+                    }
+                } else {
+                    // Pruned tree encountered, we can't proceed
+                    throw new Error(`Not enough nodes to get account ${unhashed.toString(16)}!`);
+                }
+            }
+    }
+
     updateWriteSet(writeSet: Map<bigint, WriteSetChanges>, address: bigint, hashedAddress : Buffer, account: EthereumAccount, usedNodes: Set<bigint>, nodeBag: Map<bigint, MerklePatriciaTreeNode<EthereumAccount>>) {
         writeSet.set(address, {
             hashedAddress,
+            account,
             nonce: account.nonce,
             balance: account.balance
         })
@@ -147,7 +179,7 @@ export class BlockGenerator {
     }
 
     /** Order and execute the given transaction map. */
-    async orderAndExecuteTransactions(transactions : TransactionData[]) : Promise<ExecutionResult> {
+    async orderAndExecuteTransactions(transactions : TransactionData[], verifyOnly = false) : Promise<ExecutionResult> {
         const order : TransactionData[] = [];
         const writeSet = new Map<bigint, WriteSetChanges>();
         const shareBag = new Map<bigint, MerklePatriciaTreeNode<EthereumAccount>>();
@@ -155,16 +187,14 @@ export class BlockGenerator {
 
         const start = process.hrtime.bigint();
         let gasUsed = 0n;
-        let i = 0;
         for (const tx of transactions) {
-            i++;
             this.logger.debug(`Processing tx ${tx.txHash.toString(16)}`);
 
             // The proofs to use, (shared bag if turned on)
-            const proofs = this.options.config.shareBag ? shareBag : tx.proofs;
+            const proofs = verifyOnly ? this.learnedNodes :
+                           this.options.config.shareBag ? shareBag : tx.proofs;
 
-            if (this.options.config.shareBag) {
-                // add this transaction to the "big" shared node bag
+            if (!verifyOnly) {
                 for (const [hash, node] of tx.proofs) {
                     shareBag.set(hash, node);
                 }
@@ -174,24 +204,7 @@ export class BlockGenerator {
                 // First, verify that the FROM account can be found and the
                 // nonce in the transaction is one greater than the account
                 // nonce.
-                let fromAccount : EthereumAccount;
-                try {
-                    fromAccount = 
-                        this.tree.getFromCache(tx.fromHash, nodesUsed, proofs);
-                } catch (e) {
-                    // TODO: remove nested try-catch
-                    if (e instanceof MerkleKeyNotFoundError) {
-                        // Generate the account if it doesn't exist
-                        if (this.options.config.generateFromAccounts) {
-                            fromAccount = new EthereumAccount(tx.tx.nonce, MAX_256_UNSIGNED, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
-                        } else {
-                            throw new Error(`From account ${tx.tx.from.toString(16)} does not exist!`);
-                        }
-                    } else {
-                        // Pruned tree encountered, we can't proceed
-                        throw e;
-                    }
-                }
+                let fromAccount = this.getAccount(writeSet, tx.tx.from, tx.fromHash, proofs, nodesUsed, this.options.config.generateFromAccounts, tx.tx.nonce);
 
                 if (!this.options.config.disableNonceCheck && tx.tx.nonce !== fromAccount.nonce) {
                     throw new Error(`From account ${tx.tx.from.toString(16)} had incorrect nonce ${fromAccount.nonce}, expected ${tx.tx.nonce}`);
@@ -202,7 +215,7 @@ export class BlockGenerator {
                     throw new Error(`tx ${tx.txHash.toString(16)} CONTRACT_CREATION, but CONTRACT_CREATION not yet supported`);
                 }
 
-                const toAccount = this.tree.getFromCache(tx.toHash, nodesUsed, proofs);
+                const toAccount = this.getAccount(writeSet, tx.tx.to, tx.toHash, proofs, nodesUsed);
                 if (toAccount === null) {
                     // This means we're going to CREATE this account.
                     this.logger.debug(`tx ${tx.txHash.toString(16)} create new account ${tx.tx.to.toString(16)}`);
@@ -253,6 +266,18 @@ export class BlockGenerator {
         const stateRoot = this.tree.rootHash;
 
         this.logger.debug(`Executed new block ${this.blockNumber} with new root ${stateRoot.toString(16)} using ${gasUsed} gas`);
+        // Advertise the nodes used asynchronously to neighbors
+        if (!verifyOnly) {
+            const nodesUsedAsBuffers : Buffer[] = [];
+            for (const nodeHash of nodesUsed.values()) {
+                const node = shareBag.get(nodeHash);
+                if (node === undefined) {
+                    throw new Error(`Merkle tree indicated a node was used that we don't have!`);
+                }
+                nodesUsedAsBuffers.push(node.getRlpNodeEncoding(this.tree.options as MerklePatriciaTreeOptions<{}, EthereumAccount>));
+            }
+            this.networkLearner.advertiseNodesToNeighbors(nodesUsedAsBuffers);
+        }
 
         return {
             stateRoot: stateRoot,
@@ -276,7 +301,7 @@ export class BlockGenerator {
         return tree.rootHash;
     }
 
-    /** Propose the block to the list of storage nodes. */
+    /** Propose the block to the list of storage nodes, and advertise a new block to connected neighbors */
     async proposeBlock(header: EthereumHeader, execution: ExecutionResult) : Promise<bigint> {
         // Encode the new block. We don't support uncles.
         const block = encodeBlock(header, execution.order.map(data => data.txRlp), []);
@@ -315,8 +340,28 @@ export class BlockGenerator {
             }));
         }
 
+        // Advertise to neighbors. No need to wait.
+        this.networkLearner.advertiseBlockToNeighbors(block);
+
         await Promise.all(shardRequestList);
         return hashAsBigInt(HashType.KECCAK256, RlpEncode(encodeHeaderAsRLP(header)));
+    }
+
+    /** Learn about a block from a neighbor */
+    learnBlock(b : EthereumBlock) {
+        // TODO: Verify proof of work
+
+        // make sure the parent matches our parent
+        if (b.header.parentHash !== this.parentHash) {
+            const blockhash = hashAsBigInt(HashType.KECCAK256, RlpEncode(encodeHeaderAsRLP(b.header)));
+            this.logger.error(`Got block from neighbor with parent hash which was incorrect ${blockhash.toString(16)}`)
+        } else {
+            this.blockResolver(b);
+        }
+    }
+
+    learnNode(hash : bigint, node: MerklePatriciaTreeNode<EthereumAccount>) {
+        this.learnedNodes.set(hash, node);
     }
 
     /** Initializes the connections to all storage shards. */
@@ -378,6 +423,12 @@ export class BlockGenerator {
         await Promise.all(replyPromises);
     }
 
+    private getBlockAdvertisementPromise() : Promise<EthereumBlock> {
+        return new Promise((resolve, reject) => {
+            this.blockResolver = resolve;
+        });
+    }
+
     /** Every cycle, select as many incoming transactions as possible and
      *  attempt to solve a "proof-of-work" puzzle.
      */
@@ -409,22 +460,53 @@ export class BlockGenerator {
 
             // Simulate solving the proof of work algorithm.
             const headerPromise = this.solveProofOfWork(executionResult, transactionsRoot);
-            // And simultaneously report success/failure to clients
+            // Simultaneously report success/failure to clients
             const replyPromise = this.replyToClients(blockTransactions);
+            // And listen for any incoming transactions
+            const resolverPromise = this.getBlockAdvertisementPromise();
 
-            // Wait for both replies to finish and proof-of-work to be solved.
-            await Promise.all([headerPromise, replyPromise]);
-            const header = await headerPromise;
+            // Wait for either PoW to be solved or a neighbor to get us a block.
+            const race = await Promise.race([headerPromise, resolverPromise]);
+            
+            // TODO: use a better property to determine promise completion
+            if ((race as EthereumHeader).blockNumber !== undefined) {
+                // We successfully mined a block, adopt it
+                const header = race as EthereumHeader;
+                this.logger.info(`PoW solution found, proposing new block ${this.blockNumber.toString()}`);
+                this.learnedNodes.clear();
+                this.parentHash = await this.proposeBlock(header, executionResult);
+                this.logger.info(`New block ${this.parentHash.toString(16)} successfully proposed, adopting as parent`);
+                this.blockNumber++;
+            } else {
+                // Someone else beat us, adopt their block
+                const alt = race as EthereumBlock;
 
-            // TODO: in parallel, another verifier may advertise a new solution to us.
-            // If that is the case we drop our PoW, and verify their block
-            // If their block is correct, we adopt their block as the new parentHash
-            // and remove and txHashes from that block currently in our queue.
+                // Revert out merkle tree changes and re-execute
+                this.logger.info(`Reprocessing transactions on original tree using ${this.learnedNodes.size} learned nodes`);
+                const emptyProofs = new Map<bigint, MerklePatriciaTreeNode<EthereumAccount>>();
 
-            this.logger.info(`PoW solution found, proposing new block ${this.blockNumber.toString()}`);
-            this.parentHash = await this.proposeBlock(header, executionResult);
-            this.logger.info(`New block ${this.parentHash.toString(16)} successfully proposed, adopting as parent`);
-            this.blockNumber++;
+                const txdata : TransactionData[] = alt.transactions.map(tx => {
+                    return {
+                        txHash: 0n, // only used for debugging
+                        txRlp: [] as RlpList, // only used for generating blocks
+                        txBinary: Buffer.from([]),
+                        proofs: emptyProofs,
+                        fromHash: hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.from, 20)),
+                        toHash: hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.to, 20)),
+                        tx,
+                        callback: () => {}
+                    };
+                })
+                await this.orderAndExecuteTransactions(txdata, true);
+
+                const blockhash = hashAsBigInt(HashType.KECCAK256, RlpEncode(encodeHeaderAsRLP(alt.header)));
+                this.parentHash = blockhash;
+                this.blockNumber = alt.header.blockNumber + 1n;
+                this.logger.info(`Adopted alternative block ${alt.header.blockNumber.toString()} with hash ${blockhash.toString(16)}`);
+
+                // Reschedule transactions
+                this.txQueue.push(...blockTransactions);
+            }
 
             // Prune the state cache.
             this.tree.pruneStateCache();
