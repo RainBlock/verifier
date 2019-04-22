@@ -480,8 +480,8 @@ export class BlockGenerator {
         // accepts blocks from other verifiers and verifies them.
         while (this.running) {
             // Take transactions off of the queue to be included into the new block
-            const blockTransactions = this.txQueue;
-            this.txQueue = [];
+            const blockTransactions = this.options.config.maxTxPerBlock ? this.txQueue.slice(0, this.options.config.maxTxPerBlock) : this.txQueue;
+            this.txQueue = this.options.config.maxTxPerBlock ? this.txQueue.slice(this.options.config.maxTxPerBlock) : [];
             this.logger.info(`Assembling new block ${this.blockNumber.toString()} with ${blockTransactions.length} txes`);
 
             // Decide on which transactions will be included in the block, order and execute them.

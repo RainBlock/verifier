@@ -23,6 +23,8 @@ export interface ConfigurationFile {
     powMin?: number;
     /** The maximum amount of time for a proof of work puzzle to be solved */
     powMax?: number;
+    /** The maximum number of transactions to put in a block. 0 for unlimited */
+    maxTxPerBlock? : number;
 }
 
 /** RPC settings */
