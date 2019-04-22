@@ -19,6 +19,10 @@ export interface ConfigurationFile {
     pruneDepth? : number;
     /** True, if transactions for the same block share a "big" node bag */
     shareBag?: boolean;
+    /** The minimum amount of time for a proof of work puzzle to be solved */
+    powMin?: number;
+    /** The maximum amount of time for a proof of work puzzle to be solved */
+    powMax?: number;
 }
 
 /** RPC settings */

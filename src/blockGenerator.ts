@@ -18,8 +18,6 @@ import { WriteStream } from 'tty';
 const MAX_256_UNSIGNED = 115792089237316195423570985008687907853269984665640564039457584007913129639935n;
 
 export interface BlockGeneratorOptions {
-    /** The maximum amount of time the proof of work puzzle takes to solve */
-    proofOfWorkTime: number;
     /** The configuration from the configuration file */
     config: ConfigurationFile
     /** The configuratino file directory */
@@ -112,7 +110,16 @@ export class BlockGenerator {
         }, options.config.pruneDepth);
         this.verifiers = [];
 
-        logger.debug(`New blocks will be assembled between every 0-${options.proofOfWorkTime/1000} seconds`);
+        // Set default PoW times
+        if (!options.config.powMin) {
+            options.config.powMin = 5000;
+        }
+
+        if (!options.config.powMax) {
+            options.config.powMax = 12000;
+        }
+
+        logger.debug(`New blocks will be assembled between every ${options.config.powMin/1000}-${options.config.powMax/1000} seconds`);
     }
 
     /** Queue a new transaction to be included in the next block. */
@@ -139,7 +146,8 @@ export class BlockGenerator {
                 mixHash: 0n, // TODO: generate a valid mixHash
                 nonce: 0n, // TODO: pick a valid nonce
                 blockNumber: this.blockNumber
-            }), Math.random() * this.options.proofOfWorkTime);
+                // Number between powMax and powMin
+            }),  Math.floor(Math.random()*(this.options.config.powMax!-this.options.config.powMin!+1)+this.options.config.powMin!));
         });
     }
 
@@ -451,12 +459,9 @@ export class BlockGenerator {
             this.blockResolver = resolve;
         });
     }
+    
 
-    /** Every cycle, select as many incoming transactions as possible and
-     *  attempt to solve a "proof-of-work" puzzle.
-     */
-    async generate() {
-
+    async initialize() {
         // Before we start, load the initial state from the genesis data.
         // In the future, we will be able to pick either loading it from
         // genesis or a storage node.
@@ -465,7 +470,12 @@ export class BlockGenerator {
         // Connect to all storage shards and wait for the connections to
         // be active before starting.
         await this.connectToStorageNodes();
+    }
 
+    /** Every cycle, select as many incoming transactions as possible and
+     *  attempt to solve a "proof-of-work" puzzle.
+     */
+    async generate() {
         // The main loop, which generates blocks and proposes them to storage, or
         // accepts blocks from other verifiers and verifies them.
         while (this.running) {

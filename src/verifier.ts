@@ -19,9 +19,7 @@ import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
 import { GethStateDump, ImportGethDump } from './gethImport';
 import { ServiceDefinition } from 'grpc';
-import { EventEmitter } from 'events';
 import { NetworkLearner } from './networkLearner';
-import { IVerifierService } from '@rainblock/protocol/generated/verifier_grpc_pb';
 
 process.env["NODE_NO_WARNINGS"] = "1";
 
@@ -30,7 +28,6 @@ program.version('1').description('The rainblock verifier server')
     .option('--port <port-number>', 'Serve on <port-number>.', program.INTEGER, 9000)
     .option('--config <path>', 'The <path> to the configurtion file', program.STRING, path.join(__dirname, '../sample/config.yml'))
     .option('--beneficiary <address>', 'The <address> of the beneficiary. If set, overrides any beneficary set in the config.', program.STRING)
-    .option('--pow <time>', 'The maximum <time> in ms the proof of work puzzle takes to solve', program.INTEGER, 12000)
     .option('--wait', 'Wait to connect to all verifiers before generating blocks', program.BOOLEAN)
     .action(async (a, o, l) => {
         let config = yaml.safeLoad(await fs.promises.readFile(o['config'], "utf8")) as ConfigurationFile;
@@ -41,22 +38,24 @@ program.version('1').description('The rainblock verifier server')
 
         const server = new grpc.Server();
 
-
-
         const learner = new NetworkLearner(l, config);
         const generator = new BlockGenerator(l, {
-            proofOfWorkTime: o['pow'],
             config,
             configDir: path.dirname(o['config'])
         }, learner);
 
+        // First, initialize the block generator state
+        await generator.initialize();
+
+        // Then start the verifier service
         server.addService(VerifierService, new VerifierServer(l, config, generator));
         server.bind(`0.0.0.0:${o['port']}`, grpc.ServerCredentials.createInsecure());
         server.start();
 
         l.info(`Serving on port ${o['port']} as beneficiary ${config.beneficiary}`);
-
         learner.startLearning();
+
+
 
         // If we need to wait for all neighbors
         if (o['wait']) {
