@@ -89,11 +89,14 @@ export class BlockGenerator {
     private gasLimit : bigint;
     private beneficiary : bigint;
     private learnedNodes : Map<bigint, MerklePatriciaTreeNode<EthereumAccount>> = new Map();
+    private lastLearnedNodes : Map<bigint, MerklePatriciaTreeNode<EthereumAccount>> = new Map();
+    private learnedBlocks : Map<bigint, EthereumBlock> = new Map();
     private tree : CachedMerklePatriciaTree<Buffer, EthereumAccount>;
     private verifiers : VerifierStorageClient[];
     private blockResolver : (b : EthereumBlock) => void =  () => {};
 
     private txQueue : TransactionData[] = [];
+    private neighborBlock? : EthereumBlock;
 
     constructor(private logger: Logger, public options : BlockGeneratorOptions, public networkLearner: NetworkLearner,
          public running: boolean = true) {
@@ -161,7 +164,7 @@ export class BlockGenerator {
 
             // Otherwise, fetch it from the tree, generating a copy
             try {
-                return this.tree.getFromCache(hashedAddress, nodesUsed, nodeBag).copy();
+                return this.tree.getFromCache(hashedAddress, nodesUsed, nodeBag, this.lastLearnedNodes).copy();
             } catch (e) {
                 if (e instanceof MerkleKeyNotFoundError) {
                     // Generate the account if it doesn't exist
@@ -198,7 +201,7 @@ export class BlockGenerator {
             });
         }
 
-        return this.tree.batchCOWwithNodeBag(puts, usedNodes, nodeBag);
+        return this.tree.batchCOWwithNodeBag(puts, usedNodes, nodeBag, this.lastLearnedNodes);
     }
     /** Order and execute the given transaction map. */
     async orderAndExecuteTransactions(transactions : TransactionData[], verifyOnly = false) : Promise<ExecutionResult> {
@@ -382,6 +385,12 @@ export class BlockGenerator {
     learnBlock(b : EthereumBlock) {
         // TODO: Verify proof of work
 
+        // is it for a FUTURE block? if so, add it to the map
+        if (b.header.blockNumber > this.blockNumber) {
+            // We only learn one at a time, for now
+            this.learnedBlocks.set(b.header.blockNumber, b);
+        }
+
         // make sure the parent matches our parent
         if (b.header.parentHash !== this.parentHash) {
             const blockhash = hashAsBigInt(HashType.KECCAK256, RlpEncode(encodeHeaderAsRLP(b.header)));
@@ -456,7 +465,10 @@ export class BlockGenerator {
 
     private getBlockAdvertisementPromise() : Promise<EthereumBlock> {
         return new Promise((resolve, reject) => {
-            this.blockResolver = resolve;
+            this.blockResolver = (b: EthereumBlock) => {
+                this.neighborBlock = b;
+                resolve;
+            }
         });
     }
     
@@ -472,6 +484,31 @@ export class BlockGenerator {
         await this.connectToStorageNodes();
     }
 
+    async adoptAlternativeBlock(alt : EthereumBlock) {
+        // Revert out merkle tree changes and re-execute
+        this.logger.info(`Reprocessing transactions on original tree using ${this.learnedNodes.size} learned nodes`);
+        const emptyProofs = new Map<bigint, MerklePatriciaTreeNode<EthereumAccount>>();
+
+        const txdata : TransactionData[] = alt.transactions.map(tx => {
+            return {
+                txHash: 0n, // only used for debugging
+                txRlp: [] as RlpList, // only used for generating blocks
+                txBinary: Buffer.from([]),
+                proofs: emptyProofs,
+                fromHash: hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.from, 20)),
+                toHash: hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.to, 20)),
+                tx,
+                callback: () => {}
+            };
+        })
+        const newResult = await this.orderAndExecuteTransactions(txdata, true);
+        this.tree = newResult.newTree;
+        const blockhash = hashAsBigInt(HashType.KECCAK256, RlpEncode(encodeHeaderAsRLP(alt.header)));
+        this.parentHash = blockhash;
+        this.blockNumber = alt.header.blockNumber + 1n;
+        this.logger.info(`Adopted alternative block ${alt.header.blockNumber.toString()} with hash ${blockhash.toString(16)}`);
+    }
+
     /** Every cycle, select as many incoming transactions as possible and
      *  attempt to solve a "proof-of-work" puzzle.
      */
@@ -479,68 +516,58 @@ export class BlockGenerator {
         // The main loop, which generates blocks and proposes them to storage, or
         // accepts blocks from other verifiers and verifies them.
         while (this.running) {
-            // Take transactions off of the queue to be included into the new block
-            const blockTransactions = this.options.config.maxTxPerBlock ? this.txQueue.slice(0, this.options.config.maxTxPerBlock) : this.txQueue;
-            this.txQueue = this.options.config.maxTxPerBlock ? this.txQueue.slice(this.options.config.maxTxPerBlock) : [];
-            this.logger.info(`Assembling new block ${this.blockNumber.toString()} with ${blockTransactions.length} txes`);
-
-            // Decide on which transactions will be included in the block, order and execute them.
-            const executionResult = await this.orderAndExecuteTransactions(blockTransactions);
-            this.logger.info(`Assembled ${executionResult.order.length} txes in ${executionResult.executionTime}ns`);
-
-            // Calculate the transactionsRoot
-            const transactionsRoot = await this.calculateTransactionsRoot(executionResult.order);
-
-            // Simulate solving the proof of work algorithm.
-            const headerPromise = this.solveProofOfWork(executionResult, transactionsRoot);
-            // Simultaneously report success/failure to clients
-            const replyPromise = this.replyToClients(blockTransactions);
-            // And listen for any incoming transactions
-            const resolverPromise = this.getBlockAdvertisementPromise();
-
-            // Wait for either PoW to be solved or a neighbor to get us a block.
-            const race = await Promise.race([headerPromise, resolverPromise]);
-            
-            // TODO: use a better property to determine promise completion
-            if ((race as EthereumHeader).blockNumber !== undefined) {
-                // We successfully mined a block, adopt it
-                const header = race as EthereumHeader;
-                this.logger.info(`PoW solution found, proposing new block ${this.blockNumber.toString()}`);
-                this.learnedNodes.clear();
-                this.parentHash = await this.proposeBlock(header, executionResult);
-                this.logger.info(`New block ${this.parentHash.toString(16)} successfully proposed, adopting as parent`);
-                // Adopt the new tree
-                this.tree = executionResult.newTree;
-                this.blockNumber++;
+            if (this.learnedBlocks.has(this.blockNumber))
+            { 
+                let blockNumber = this.blockNumber;
+                // We already have this block. Process it
+                await this.adoptAlternativeBlock(this.learnedBlocks.get(this.blockNumber)!);
+                // Remove it from the list
+                this.learnedBlocks.delete(blockNumber);
             } else {
-                // Someone else beat us, adopt their block
-                const alt = race as EthereumBlock;
+                // listen for any incoming transactions
+                const resolverPromise = this.getBlockAdvertisementPromise();
 
-                // Revert out merkle tree changes and re-execute
-                this.logger.info(`Reprocessing transactions on original tree using ${this.learnedNodes.size} learned nodes`);
-                const emptyProofs = new Map<bigint, MerklePatriciaTreeNode<EthereumAccount>>();
+                // Take transactions off of the queue to be included into the new block
+                const blockTransactions = this.options.config.maxTxPerBlock ? this.txQueue.slice(0, this.options.config.maxTxPerBlock) : this.txQueue;
+                this.txQueue = this.options.config.maxTxPerBlock ? this.txQueue.slice(this.options.config.maxTxPerBlock) : [];
+                this.logger.info(`Assembling new block ${this.blockNumber.toString()} with ${blockTransactions.length} txes`);
 
-                const txdata : TransactionData[] = alt.transactions.map(tx => {
-                    return {
-                        txHash: 0n, // only used for debugging
-                        txRlp: [] as RlpList, // only used for generating blocks
-                        txBinary: Buffer.from([]),
-                        proofs: emptyProofs,
-                        fromHash: hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.from, 20)),
-                        toHash: hashAsBuffer(HashType.KECCAK256, toBufferBE(tx.to, 20)),
-                        tx,
-                        callback: () => {}
-                    };
-                })
-                const newResult = await this.orderAndExecuteTransactions(txdata, true);
-                this.tree = newResult.newTree;
-                const blockhash = hashAsBigInt(HashType.KECCAK256, RlpEncode(encodeHeaderAsRLP(alt.header)));
-                this.parentHash = blockhash;
-                this.blockNumber = alt.header.blockNumber + 1n;
-                this.logger.info(`Adopted alternative block ${alt.header.blockNumber.toString()} with hash ${blockhash.toString(16)}`);
+                // Decide on which transactions will be included in the block, order and execute them.
+                const executionResult = await this.orderAndExecuteTransactions(blockTransactions);
+                this.logger.info(`Assembled ${executionResult.order.length} txes in ${executionResult.executionTime}ns`);
 
-                // Reschedule transactions
-                this.txQueue.push(...blockTransactions);
+                // Calculate the transactionsRoot
+                const transactionsRoot = await this.calculateTransactionsRoot(executionResult.order);
+
+                // Simulate solving the proof of work algorithm.
+                const headerPromise = this.solveProofOfWork(executionResult, transactionsRoot);
+                // Simultaneously report success/failure to clients
+                const replyPromise = this.replyToClients(blockTransactions);
+
+
+                // Wait for either PoW to be solved or a neighbor to get us a block.
+                const race = await Promise.race([headerPromise, resolverPromise]);
+                
+                // TODO: use a better property to determine promise completion
+                if (!(this.neighborBlock !== undefined && this.neighborBlock.header.blockNumber === this.blockNumber) && (race as EthereumHeader).blockNumber !== undefined) {
+                    // We successfully mined a block, adopt it
+                    const header = race as EthereumHeader;
+                    this.logger.info(`PoW solution found, proposing new block ${this.blockNumber.toString()}`);
+                    let learned = this.learnedNodes;
+                    this.learnedNodes = new Map();
+                    this.lastLearnedNodes.clear();
+                    this.lastLearnedNodes = learned;
+                    this.parentHash = await this.proposeBlock(header, executionResult);
+                    this.logger.info(`New block #${this.blockNumber} ${this.parentHash.toString(16)} successfully proposed, adopting as parent`);
+                    // Adopt the new tree
+                    this.tree = executionResult.newTree;
+                    this.blockNumber++;
+                } else {
+                    // Someone else beat us, adopt their block
+                    await this.adoptAlternativeBlock(this.neighborBlock!);
+                    // Reschedule transactions
+                    this.txQueue.push(...blockTransactions);
+                }
             }
 
             // Prune the state cache.
