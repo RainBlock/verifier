@@ -4,7 +4,7 @@ import { encodeBlock, encodeHeaderAsRLP } from '@rainblock/ethereum-block'
 import { RlpList, RlpEncode, RlpDecode } from 'rlp-stream/build/src/rlp-stream';
 import { EthereumAccount, EthereumAccountFromBuffer } from './ethereumAccount';
 import { VerifierStorageClient, UpdateMsg, grpc, UpdateOp, StorageUpdate, TransactionReply, ErrorCode} from '@rainblock/protocol'
-import { MerklePatriciaTree, CachedMerklePatriciaTree, MerklePatriciaTreeOptions, MerklePatriciaTreeNode, MerkleKeyNotFoundError } from '@rainblock/merkle-patricia-tree';
+import { MerklePatriciaTree, CachedMerklePatriciaTree, MerklePatriciaTreeOptions, MerklePatriciaTreeNode, MerkleKeyNotFoundError, BatchPut } from '@rainblock/merkle-patricia-tree';
 import { GethStateDump, GethStateDumpAccount, ImportGethDump } from './gethImport';
 
 import * as fs from 'fs';
@@ -13,6 +13,7 @@ import { hashAsBigInt, hashAsBuffer, HashType } from 'bigint-hash';
 import { toBufferBE, toBigIntBE } from 'bigint-buffer';
 import { ServiceError } from 'grpc';
 import { NetworkLearner } from './networkLearner';
+import { WriteStream } from 'tty';
 
 const MAX_256_UNSIGNED = 115792089237316195423570985008687907853269984665640564039457584007913129639935n;
 
@@ -69,6 +70,8 @@ interface ExecutionResult {
     executionTime: bigint;
     /** The write set, keyed by address */
     writeSet: Map<bigint, WriteSetChanges>;
+    /** A copy on write Merkle tree resulting from the changes */
+    newTree: CachedMerklePatriciaTree<Buffer, EthereumAccount>;
 }
 
 /** Per account write set changes. */
@@ -161,7 +164,7 @@ export class BlockGenerator {
                     }
                 } else {
                     // Pruned tree encountered, we can't proceed
-                    throw new Error(`Not enough nodes to get account ${unhashed.toString(16)}!`);
+                    throw new Error(`Not enough nodes to get account ${unhashed.toString(16)}! Using nodebag with ${nodeBag.size} nodes.`);
                 }
             }
     }
@@ -173,16 +176,28 @@ export class BlockGenerator {
             nonce: account.nonce,
             balance: account.balance
         })
-
-        // TODO: defer update tree until end
-        this.tree.putWithNodeBag(hashedAddress, account, usedNodes, nodeBag);
     }
 
+    /** Generates a new copy-on-write merkle tree based on the write set */
+    generateCopyOnWriteTree(writeSet: Map<bigint, WriteSetChanges>, usedNodes: Set<bigint>, nodeBag: Map<bigint, MerklePatriciaTreeNode<EthereumAccount>>) {
+        
+        const puts : BatchPut<Buffer, EthereumAccount>[] = [];
+
+        for (const [address, data] of writeSet.entries()) {
+            puts.push({
+                key: data.hashedAddress,
+                val: data.account
+            });
+        }
+
+        return this.tree.batchCOWwithNodeBag(puts, usedNodes, nodeBag);
+    }
     /** Order and execute the given transaction map. */
     async orderAndExecuteTransactions(transactions : TransactionData[], verifyOnly = false) : Promise<ExecutionResult> {
         const order : TransactionData[] = [];
         const writeSet = new Map<bigint, WriteSetChanges>();
         const shareBag = new Map<bigint, MerklePatriciaTreeNode<EthereumAccount>>();
+        const bufferBag = new Map<bigint, Buffer>();
         const nodesUsed = new Set<bigint>();
 
         const start = process.hrtime.bigint();
@@ -197,6 +212,10 @@ export class BlockGenerator {
             if (!verifyOnly) {
                 for (const [hash, node] of tx.proofs) {
                     shareBag.set(hash, node);
+                    bufferBag.set(hash, node.getRlpNodeEncoding({
+                        keyConverter: k => k as Buffer,
+                        valueConverter: v => v.toRlp(),
+                        putCanDelete: false}));
                 }
             }
 
@@ -263,18 +282,21 @@ export class BlockGenerator {
         
         /** The miner gets to include their reward */
         // This is a TODO
-        const stateRoot = this.tree.rootHash;
 
-        this.logger.debug(`Executed new block ${this.blockNumber} with new root ${stateRoot.toString(16)} using ${gasUsed} gas`);
+        // Generate a copy on write Merkle tree
+        const newTree = this.generateCopyOnWriteTree(writeSet, nodesUsed, verifyOnly ? this.learnedNodes : shareBag);
+        const stateRoot = newTree.rootHash;
+
+        this.logger.info(`Executed new block ${this.blockNumber} with new root ${stateRoot.toString(16)} using ${gasUsed} gas`);
         // Advertise the nodes used asynchronously to neighbors
         if (!verifyOnly) {
             const nodesUsedAsBuffers : Buffer[] = [];
             for (const nodeHash of nodesUsed.values()) {
-                const node = shareBag.get(nodeHash);
+                const node = bufferBag.get(nodeHash);
                 if (node === undefined) {
                     throw new Error(`Merkle tree indicated a node was used that we don't have!`);
                 }
-                nodesUsedAsBuffers.push(node.getRlpNodeEncoding(this.tree.options as MerklePatriciaTreeOptions<{}, EthereumAccount>));
+                nodesUsedAsBuffers.push(node);
             }
             this.networkLearner.advertiseNodesToNeighbors(nodesUsedAsBuffers);
         }
@@ -285,6 +307,7 @@ export class BlockGenerator {
             timestamp: BigInt(Date.now()),
             order,
             writeSet,
+            newTree,
             executionTime: process.hrtime.bigint() - start
         }
     }
@@ -476,6 +499,8 @@ export class BlockGenerator {
                 this.learnedNodes.clear();
                 this.parentHash = await this.proposeBlock(header, executionResult);
                 this.logger.info(`New block ${this.parentHash.toString(16)} successfully proposed, adopting as parent`);
+                // Adopt the new tree
+                this.tree = executionResult.newTree;
                 this.blockNumber++;
             } else {
                 // Someone else beat us, adopt their block
@@ -497,8 +522,8 @@ export class BlockGenerator {
                         callback: () => {}
                     };
                 })
-                await this.orderAndExecuteTransactions(txdata, true);
-
+                const newResult = await this.orderAndExecuteTransactions(txdata, true);
+                this.tree = newResult.newTree;
                 const blockhash = hashAsBigInt(HashType.KECCAK256, RlpEncode(encodeHeaderAsRLP(alt.header)));
                 this.parentHash = blockhash;
                 this.blockNumber = alt.header.blockNumber + 1n;
