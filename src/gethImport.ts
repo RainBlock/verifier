@@ -76,12 +76,12 @@ export async function ImportGethDump(path: string, tree: MerklePatriciaTree<Buff
                 if (Object.entries(account.storage).length > 0) {
                     throw new Error('Proof state file with storage not yet supported');
                 }
-                const code = Buffer.from(account.code, 'hex');
-                const codeHash = hashAsBigInt(HashType.KECCAK256, code);
-                if (account.codeHash !== codeHash.toString(16)) {
-                    throw new Error(`Codehash for account ${id} did not match calcuated hash: got ${codeHash.toString(16)}, expected ${account.codeHash}`);
-                }
-                const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), codeHash, EthereumAccount.EMPTY_BUFFER_HASH);
+                //const code = Buffer.from(account.code, 'hex');
+                //const codeHash = hashAsBigInt(HashType.KECCAK256, code);
+                //if (account.codeHash !== codeHash.toString(16)) {
+                //    throw new Error(`Codehash for account ${id} did not match calcuated hash: got ${codeHash.toString(16)}, expected ${account.codeHash}`);
+                //}
+                const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
                 tree.put(hashed, parsedAccount);
             }
             if (i % 10000 === 0) {
