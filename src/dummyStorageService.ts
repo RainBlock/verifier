@@ -19,10 +19,10 @@ export class DummyStorageServer implements IVerifierStorageServer, IStorageNodeS
         putCanDelete: false
     });
 
-    constructor(private logger : Logger, genesisData?: string, compressed = false, public compactionLevel = 0) {
+    constructor(private logger : Logger, shardNumber : number, genesisData?: string, compressed = false, public compactionLevel = 0) {
 
         if (genesisData !== undefined) {
-            ImportGethDump(genesisData, this.tree, new Map<bigint, Buffer>(), compressed)
+            ImportGethDump(genesisData, this.tree, new Map<bigint, Buffer>(), compressed, shardNumber)
                 .then(() => {
                     this.logger.info(`Initialized state to stateRoot ${this.tree.rootHash.toString(16)}`);
                 });
