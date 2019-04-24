@@ -472,6 +472,7 @@ program.command('submit-tx', 'Submit a transaction using parameters given.')
 
 program.command('proof-size', 'Calculate the sizes of proofs using varying parameters.')
     .option('--multiply', 'Multiply by 10 instead of increment', program.BOOLEAN, false)
+    .option('--fastgen', 'Generate mock accounts instead of performing secp256k1 brute force', program.BOOLEAN, false)
     .option('--addressStart <number>', 'Number of addresses to start at', program.INTEGER, 2)
     .option('--addressCount <count>', 'Number of addresses total', program.INTEGER, 64)
     .option('--file <path>', 'Save data file to <path>', program.STRING, undefined, true)
@@ -488,7 +489,7 @@ program.command('proof-size', 'Calculate the sizes of proofs using varying param
             accountData.pruningLevel = {};
             const tree = new MerklePatriciaTree();
             for (let accountKey = 1; accountKey < accounts + 1; accountKey++) {
-                const address = await getPublicAddress(BigInt(accountKey));               
+                const address = o['fastgen'] ? hashAsBigInt(HashType.SHA1, toBufferBE(BigInt(accountKey), 20)) : await getPublicAddress(BigInt(accountKey));               
                 tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(address, 20)), dummySimpleData);
             }
 
