@@ -221,10 +221,7 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
         }
 
         bar.stop();
-        await fs.promises.writeFile(o['json'], JSON.stringify(json, null, 2), 'utf8');
-        await fs.promises.writeFile(o['map'], JSON.stringify(map, null, 2), 'utf8');
-        
-        // Don't need accounts json anymore. It should be GCable at this point
+
         l.info('Done generating accounts, generating tree');
         bar = new progress.Bar({
             format: 'Adding to tree |' + colors.cyan('{bar}') + '| {percentage}% | Key: {value}/{total} | elapsed: {duration_formatted}',
@@ -260,7 +257,11 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
             nonce: 0n, // TODO: pick a valid nonce
             blockNumber: 0n
         }, [], []);
+
+        l.info(`Writing output files.`);
         await fs.promises.writeFile(o['block'], block);
+        await fs.promises.writeFile(o['json'], JSON.stringify(json, null, 2), 'utf8');
+        await fs.promises.writeFile(o['map'], JSON.stringify(map, null, 2), 'utf8')
     });
 
 program.command('generate-trace', 'Generate a transaction trace file using the parameters given')
