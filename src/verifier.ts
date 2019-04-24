@@ -485,6 +485,7 @@ program.command('proof-size', 'Calculate the sizes of proofs using varying param
         const data : { [ count : number] : {} } = {};
 
         for (let accounts = 100000; accounts <= 10_000_000; accounts *= 10) {
+            l.info(`Processing ${accounts} accounts`);
             const accountData : any = {};
             accountData.pruningLevel = {};
             const tree = new MerklePatriciaTree();
@@ -492,6 +493,7 @@ program.command('proof-size', 'Calculate the sizes of proofs using varying param
                 const address = o['fastgen'] ? hashAsBigInt(HashType.SHA1, toBufferBE(BigInt(accountKey), 20)) : await getPublicAddress(BigInt(accountKey));               
                 tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(address, 20)), dummySimpleData);
             }
+            l.info(`Generated world state, testing witness sizes`);
 
             const witness = hashes.map(m => tree.get(m));
             
