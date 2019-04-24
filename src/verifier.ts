@@ -218,6 +218,7 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
             private_key++;
         }
 
+        bar.stop();
         l.info('Done generating accounts, calculating hash');
         json.root = tree.rootHash.toString(16);
         const block = encodeBlock( {
