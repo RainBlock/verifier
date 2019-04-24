@@ -175,7 +175,6 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
     .option('--map <path>', '<path> for map of privkey to account', program.STRING, undefined, true)
     .option('--accounts <number>', '<number> of accounts to generate', program.INTEGER, 100000, true)
     .option('--balance <amount>', '<amount> to seed each account balance with', program.INTEGER, 100000, true)
-    .option('--parallelism <amount>', '<amount> of parallelism for account generation', program.INTEGER, 64, true)
     .action(async (a, o, l) => {
         let private_key = 1n;
         const tree = new MerklePatriciaTree();
@@ -197,11 +196,6 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
             root: account.storageRoot.toString(16)
         };
 
-        const generateAccount = async (private_key : bigint) => {
-            const address = await getPublicAddress(private_key);
-            json.accounts[address.toString(16)] = jsonAccount;
-            map[private_key.toString(16)] = address.toString(16); 
-        };
 
         let bar = new progress.Bar({
             format: 'Generating Public Key |' + colors.cyan('{bar}') + '| {percentage}% | Key: {value}/{total} | elapsed: {duration_formatted}',
@@ -210,14 +204,11 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
 
         bar.start(o['accounts'], 0);
 
-        let active = [];
         while (private_key < (BigInt(o['accounts']) + 1n)) {
-            active.push(generateAccount(private_key));
-            if (active.length > o['parallelism']) {
-                await Promise.all(active);
-                active = [];
-                bar.update(Number(private_key));
-            }
+            const address = await getPublicAddress(private_key);
+            json.accounts[address.toString(16)] = jsonAccount;
+            map[private_key.toString(16)] = address.toString(16); 
+            bar.update(Number(private_key));
             private_key++;
         }
 
