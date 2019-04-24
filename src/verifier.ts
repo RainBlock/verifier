@@ -117,7 +117,7 @@ program.command('test-storage-single', 'Start up a single test storage node')
 .action(async (a, o, l) => {
         const nodeAddress = `0.0.0.0:${o['port']}`;
         const server = new grpc.Server();
-        const storageServer = new DummyStorageServer(l, o['json'], o['shard'], o['compressed'], o['compactionLevel']);
+        const storageServer = new DummyStorageServer(l,  o['shard'], o['json'], o['compressed'], o['compactionLevel']);
         server.addService(VerifierStorageService as ServiceDefinition<DummyStorageServer>, storageServer);
         server.addService(StorageNodeService as ServiceDefinition<DummyStorageServer>, storageServer);
         server.bind(nodeAddress, grpc.ServerCredentials.createInsecure());
