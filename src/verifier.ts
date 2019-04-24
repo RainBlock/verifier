@@ -91,12 +91,13 @@ program.command('test-storage', 'Start up a test storage node')
     .option('--shard14 <port-number>', 'Serve shard 14 on <port-number>.', program.INTEGER, 9114)
     .option('--shard15 <port-number>', 'Serve shard 15 on <port-number>.', program.INTEGER, 9115)
     .option('--compactionLevel <level>', '<level> of compaction', program.INTEGER, 0)
+    .option('--compressed', 'if JSON is compressed', program.BOOLEAN, false)
     .option('--json <path>', '<path> for generated json (state file)', program.STRING)
     .action(async (a, o, l) => {
         for (let i = 0; i < 16; i++) {
             const nodeAddress = `0.0.0.0:${o[`shard${i}`]}`;
             const server = new grpc.Server();
-            const storageServer = new DummyStorageServer(l, o['json'], o['compactionLevel']);
+            const storageServer = new DummyStorageServer(l, o['json'], o['compressed'], o['compactionLevel']);
             server.addService(VerifierStorageService as ServiceDefinition<DummyStorageServer>, storageServer);
             server.addService(StorageNodeService as ServiceDefinition<DummyStorageServer>, storageServer);
             server.bind(nodeAddress, grpc.ServerCredentials.createInsecure());
@@ -110,11 +111,12 @@ program.command('test-storage', 'Start up a test storage node')
 program.command('test-storage-single', 'Start up a single test storage node')
 .option('--port <port-number>', 'Serve on <port-number>.', program.INTEGER, 9100)
 .option('--compactionLevel <level>', '<level> of compaction', program.INTEGER, 0)
+.option('--compressed', 'if JSON is compressed', program.BOOLEAN, false)
 .option('--json <path>', '<path> for generated json (state file)', program.STRING)
 .action(async (a, o, l) => {
         const nodeAddress = `0.0.0.0:${o['port']}`;
         const server = new grpc.Server();
-        const storageServer = new DummyStorageServer(l, o['json'], o['compactionLevel']);
+        const storageServer = new DummyStorageServer(l, o['json'], o['compressed'], o['compactionLevel']);
         server.addService(VerifierStorageService as ServiceDefinition<DummyStorageServer>, storageServer);
         server.addService(StorageNodeService as ServiceDefinition<DummyStorageServer>, storageServer);
         server.bind(nodeAddress, grpc.ServerCredentials.createInsecure());
