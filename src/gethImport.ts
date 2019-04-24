@@ -60,6 +60,7 @@ export async function ImportGethDump(path: string, tree: MerklePatriciaTree<Buff
             pick({filter: 'accounts'}),
             streamObject(),
           ]);
+        let i = 0;
         for await (const data of pipeline) {
             const account = data.value;
             const id = data.key;
@@ -83,6 +84,10 @@ export async function ImportGethDump(path: string, tree: MerklePatriciaTree<Buff
                 const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), codeHash, EthereumAccount.EMPTY_BUFFER_HASH);
                 tree.put(hashed, parsedAccount);
             }
+            if (i % 10000 === 0) {
+                console.log(`Imported ${i} accounts`);
+            }
+            i++;
         }
     }
 }
