@@ -90,12 +90,13 @@ program.command('test-storage', 'Start up a test storage node')
     .option('--shard13 <port-number>', 'Serve shard 13 on <port-number>.', program.INTEGER, 9113)
     .option('--shard14 <port-number>', 'Serve shard 14 on <port-number>.', program.INTEGER, 9114)
     .option('--shard15 <port-number>', 'Serve shard 15 on <port-number>.', program.INTEGER, 9115)
+    .option('--compactionLevel <level>', '<level> of compaction', program.INTEGER, 0)
     .option('--json <path>', '<path> for generated json (state file)', program.STRING)
     .action(async (a, o, l) => {
         for (let i = 0; i < 16; i++) {
             const nodeAddress = `0.0.0.0:${o[`shard${i}`]}`;
             const server = new grpc.Server();
-            const storageServer = new DummyStorageServer(l, o['json']);
+            const storageServer = new DummyStorageServer(l, o['json'], o['compactionLevel']);
             server.addService(VerifierStorageService as ServiceDefinition<DummyStorageServer>, storageServer);
             server.addService(StorageNodeService as ServiceDefinition<DummyStorageServer>, storageServer);
             server.bind(nodeAddress, grpc.ServerCredentials.createInsecure());
@@ -104,6 +105,23 @@ program.command('test-storage', 'Start up a test storage node')
             console.log(`Shard ${i} started on port ${o[`shard${i}`]}`);
         }
     });
+
+
+program.command('test-storage-single', 'Start up a single test storage node')
+.option('--port <port-number>', 'Serve on <port-number>.', program.INTEGER, 9100)
+.option('--compactionLevel <level>', '<level> of compaction', program.INTEGER, 0)
+.option('--json <path>', '<path> for generated json (state file)', program.STRING)
+.action(async (a, o, l) => {
+        const nodeAddress = `0.0.0.0:${o['port']}`;
+        const server = new grpc.Server();
+        const storageServer = new DummyStorageServer(l, o['json'], o['compactionLevel']);
+        server.addService(VerifierStorageService as ServiceDefinition<DummyStorageServer>, storageServer);
+        server.addService(StorageNodeService as ServiceDefinition<DummyStorageServer>, storageServer);
+        server.bind(nodeAddress, grpc.ServerCredentials.createInsecure());
+        server.start();
+
+        console.log(`Started on port ${o['port']}`);
+});
 
 
 program.command('test-transaction', 'Send a test transaction')
@@ -450,13 +468,15 @@ program.command('submit-tx', 'Submit a transaction using parameters given.')
     });
 
 program.command('proof-size', 'Calculate the sizes of proofs using varying parameters.')
+    .option('--multiply', 'Multiply by 10 instead of increment', program.BOOLEAN, false)
+    .option('--addressStart <number>', 'Number of addresses to start at', program.INTEGER, 2)
+    .option('--addressCount <count>', 'Number of addresses total', program.INTEGER, 64)
     .option('--file <path>', 'Save data file to <path>', program.STRING, undefined, true)
     .action(async (a, o, l) => {
         const dummySimpleData = new EthereumAccount(0n, 5000000n, EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH).toRlp();
-        const ADDRESS_COUNT = 64; // Represents the maximum number of calls
         // [...Array(ADDRESS_COUNT + 1).keys()].slice(1)
         // returns an array [1...ADDRESS_COUNT]
-        const addresses = await Promise.all([...Array(ADDRESS_COUNT + 1).keys()].slice(1).map(k => getPublicAddress(BigInt(k))));
+        const addresses = await Promise.all([...Array(o['addressCount'] + 1).keys()].slice(1).map(k => getPublicAddress(BigInt(k))));
         const hashes = addresses.map(m => hashAsBuffer(HashType.KECCAK256, toBufferBE(m, 20)));
         const data : { [ count : number] : {} } = {};
 
@@ -489,7 +509,7 @@ program.command('proof-size', 'Calculate the sizes of proofs using varying param
                 const sliced = converted.map(m => m.length > depth ? m.slice(depth) : [m[m.length - 1]]) // preserve the last proof
 
                 // for 2-ADDRESS_COUNT...
-                for (let totalAccounts = 2; totalAccounts < ADDRESS_COUNT + 1; totalAccounts++) {
+                for (let totalAccounts = o['addressStart']; totalAccounts < o['addressCount'] + 1; o['multiply'] ? totalAccounts *= 10 : totalAccounts++) {
                     const callData : any = {};
 
                     const proofs : Buffer[] = [];

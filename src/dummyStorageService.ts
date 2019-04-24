@@ -19,7 +19,7 @@ export class DummyStorageServer implements IVerifierStorageServer, IStorageNodeS
         putCanDelete: false
     });
 
-    constructor(private logger : Logger, genesisData?: string) {
+    constructor(private logger : Logger, genesisData?: string, public compactionLevel = 0) {
 
         if (genesisData !== undefined) {
             ImportGethDump(genesisData, this.tree, new Map<bigint, Buffer>())
@@ -45,11 +45,19 @@ export class DummyStorageServer implements IVerifierStorageServer, IStorageNodeS
             if (account.value !== null) {
                 let rpcWitness = new RPCWitness();
                 rpcWitness.setValue(account.value.toRlp());
-                rpcWitness.setProofListList(account.proof.map(n => n.getRlpNodeEncoding({
-                    keyConverter: k => k as Buffer,
-                    valueConverter: v => v.toRlp(),
+                rpcWitness.setProofListList(
+                    account.proof.length === 1 || this.compactionLevel > account.proof.length ? 
+                    account.proof.map(n => n.getRlpNodeEncoding({
+                        keyConverter: k => k as Buffer,
+                        valueConverter: v => v.toRlp() ,
                     putCanDelete: false
-                })));
+                })) :
+                account.proof.slice(this.compactionLevel).map(n => n.getRlpNodeEncoding({
+                    keyConverter: k => k as Buffer,
+                    valueConverter: v => v.toRlp() ,
+                putCanDelete: false
+            }))
+                );
             }
             callback(null, reply);
         }
