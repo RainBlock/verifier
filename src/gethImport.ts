@@ -28,8 +28,8 @@ export interface GethStateDump {
 }
 
 export async function ImportGethDump(path: string, tree: MerklePatriciaTree<Buffer, EthereumAccount>, codeMap: Map<bigint, Buffer>, compressed = false) {
-    const json = JSON.parse(await fs.promises.readFile(path, { encoding: 'utf8'} )) as GethStateDump;
     if (!compressed) {
+        const json = JSON.parse(await fs.promises.readFile(path, { encoding: 'utf8'} )) as GethStateDump;
         for (const [id, account] of Object.entries(json.accounts)) {
             // TODO: currently, this only supports accounts without storage
             if (Object.entries(account.storage).length > 0) {
