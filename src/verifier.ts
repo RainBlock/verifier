@@ -185,11 +185,12 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
         }
         const map : { [private_key : string] : string} = {};
         l.info('Generating accounts');
+        
+        // Account is constant
+        const account = new EthereumAccount(0n, BigInt(o['balance']), EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
 
         const generateAccount = async (private_key : bigint) => {
             const address = await getPublicAddress(private_key);
-            const account = new EthereumAccount(0n, BigInt(o['balance']), EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
-            tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(address, 20)), account.toRlp());
             json.accounts[address.toString(16)] = {
                 balance: account.balance.toString(),
                 nonce: Number(account.nonce),
@@ -200,8 +201,9 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
             };
             map[private_key.toString(16)] = address.toString(16); 
         };
-        const bar = new progress.Bar({
-            format: 'Processing |' + colors.cyan('{bar}') + '| {percentage}% | Key: {value}/{total} | elapsed: {duration_formatted}',
+
+        let bar = new progress.Bar({
+            format: 'Generating Public Key |' + colors.cyan('{bar}') + '| {percentage}% | Key: {value}/{total} | elapsed: {duration_formatted}',
             etaBuffer : 5
         }, progress.Presets.shades_classic);
 
@@ -219,7 +221,27 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
         }
 
         bar.stop();
-        l.info('Done generating accounts, calculating hash');
+        await fs.promises.writeFile(o['json'], JSON.stringify(json, null, 2), 'utf8');
+        await fs.promises.writeFile(o['map'], JSON.stringify(map, null, 2), 'utf8');
+        
+        // Don't need accounts json anymore. It should be GCable at this point
+        l.info('Done generating accounts, generating tree');
+        bar = new progress.Bar({
+            format: 'Adding to tree |' + colors.cyan('{bar}') + '| {percentage}% | Key: {value}/{total} | elapsed: {duration_formatted}',
+            etaBuffer : 5
+        }, progress.Presets.shades_classic);
+
+        bar.start(o['accounts'], 0);
+        const accountRlp = account.toRlp();
+        let i = 0;
+        for (const [key, address] of Object.entries(map)) {
+            tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(address), 20)), accountRlp);
+            bar.update(i);
+            i++;
+        }
+        bar.stop();
+        l.info('Done generating tree. Generating root hash.');
+
         json.root = tree.rootHash.toString(16);
         const block = encodeBlock( {
             parentHash: 0n,
@@ -238,8 +260,6 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
             nonce: 0n, // TODO: pick a valid nonce
             blockNumber: 0n
         }, [], []);
-        await fs.promises.writeFile(o['json'], JSON.stringify(json, null, 2), 'utf8');
-        await fs.promises.writeFile(o['map'], JSON.stringify(map, null, 2), 'utf8');
         await fs.promises.writeFile(o['block'], block);
     });
 
