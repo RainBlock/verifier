@@ -24,7 +24,7 @@ export class DummyStorageServer implements IVerifierStorageServer, IStorageNodeS
         if (genesisData !== undefined) {
             ImportGethDump(genesisData, this.tree, new Map<bigint, Buffer>(), compressed, shardNumber)
                 .then(() => {
-                    this.logger.info(`Initialized state to stateRoot ${this.tree.rootHash.toString(16)}`);
+                    this.logger.info(`Initialized data for shard ${shardNumber}`);
                 });
         }
     }
