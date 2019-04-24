@@ -20,6 +20,8 @@ import { toBufferBE, toBigIntBE } from 'bigint-buffer';
 import { GethStateDump, ImportGethDump } from './gethImport';
 import { ServiceDefinition } from 'grpc';
 import { NetworkLearner } from './networkLearner';
+import * as progress from 'cli-progress';
+import * as colors from 'colors';
 
 process.env["NODE_NO_WARNINGS"] = "1";
 
@@ -173,6 +175,7 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
     .option('--map <path>', '<path> for map of privkey to account', program.STRING, undefined, true)
     .option('--accounts <number>', '<number> of accounts to generate', program.INTEGER, 100000, true)
     .option('--balance <amount>', '<amount> to seed each account balance with', program.INTEGER, 100000, true)
+    .option('--parallelism <amount>', '<amount> of parallelism for account generation', program.INTEGER, 64, true)
     .action(async (a, o, l) => {
         let private_key = 1n;
         const tree = new MerklePatriciaTree();
@@ -181,7 +184,9 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
             accounts: {}
         }
         const map : { [private_key : string] : string} = {};
-        while (private_key < (BigInt(o['accounts']) + 1n)) {
+        l.info('Generating accounts');
+
+        const generateAccount = async (private_key : bigint) => {
             const address = await getPublicAddress(private_key);
             const account = new EthereumAccount(0n, BigInt(o['balance']), EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
             tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(address, 20)), account.toRlp());
@@ -194,9 +199,26 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
                 root: account.storageRoot.toString(16)
             };
             map[private_key.toString(16)] = address.toString(16); 
+        };
+        const bar = new progress.Bar({
+            format: 'Processing |' + colors.cyan('{bar}') + '| {percentage}% | Key: {value}/{total} | elapsed: {duration_formatted}',
+            etaBuffer : 5
+        }, progress.Presets.shades_classic);
+
+        bar.start(o['accounts'], 0);
+
+        let active = [];
+        while (private_key < (BigInt(o['accounts']) + 1n)) {
+            active.push(generateAccount(private_key));
+            if (active.length > o['parallelism']) {
+                await Promise.all(active);
+                active = [];
+                bar.update(Number(private_key));
+            }
             private_key++;
         }
 
+        l.info('Done generating accounts, calculating hash');
         json.root = tree.rootHash.toString(16);
         const block = encodeBlock( {
             parentHash: 0n,
