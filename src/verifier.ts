@@ -188,17 +188,18 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
         
         // Account is constant
         const account = new EthereumAccount(0n, BigInt(o['balance']), EthereumAccount.EMPTY_STRING_HASH, EthereumAccount.EMPTY_BUFFER_HASH);
+        const jsonAccount = {
+            balance: account.balance.toString(),
+            nonce: Number(account.nonce),
+            codeHash: account.codeHash.toString(16),
+            storage: {},
+            code: "",
+            root: account.storageRoot.toString(16)
+        };
 
         const generateAccount = async (private_key : bigint) => {
             const address = await getPublicAddress(private_key);
-            json.accounts[address.toString(16)] = {
-                balance: account.balance.toString(),
-                nonce: Number(account.nonce),
-                codeHash: account.codeHash.toString(16),
-                storage: {},
-                code: "",
-                root: account.storageRoot.toString(16)
-            };
+            json.accounts[address.toString(16)] = jsonAccount;
             map[private_key.toString(16)] = address.toString(16); 
         };
 
