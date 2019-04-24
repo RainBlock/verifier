@@ -34,7 +34,7 @@ export async function ImportGethDump(path: string, tree: MerklePatriciaTree<Buff
             let process = true;
             const hashed = hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20));
             if (shardNumber != -1) {
-                const topNibble = hashed[0];
+                const topNibble = (hashed[0] & 0xF0) >> 4;
                 process = shardNumber === topNibble;
             }
             if (process) {
@@ -68,7 +68,7 @@ export async function ImportGethDump(path: string, tree: MerklePatriciaTree<Buff
 
             const hashed = hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20));
             if (shardNumber != -1) {
-                const topNibble = hashed[0];
+                const topNibble = (hashed[0] & 0xF0) >> 4;
                 process = shardNumber === topNibble;
             }
             if (process) {

@@ -23,6 +23,14 @@ import { NetworkLearner } from './networkLearner';
 import * as progress from 'cli-progress';
 import * as colors from 'colors';
 
+import {chain} from 'stream-chain';
+import {parser} from 'stream-json';
+import {pick} from 'stream-json/filters/Pick';
+import {streamObject} from 'stream-json/streamers/StreamObject';
+
+import * as zlib from 'zlib';
+
+
 process.env["NODE_NO_WARNINGS"] = "1";
 
 program.version('1').description('The rainblock verifier server')
@@ -245,7 +253,7 @@ program.command('generate-genesis', 'Generate a genesis file and block with test
         const accountRlp = account.toRlp();
         let i = 0;
         for (const [key, address] of Object.entries(map)) {
-            tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(address), 20)), accountRlp);
+            tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${address.padStart(20, '0')}`), 20)), accountRlp);
             bar.update(i);
             i++;
         }
@@ -469,6 +477,50 @@ program.command('submit-tx', 'Submit a transaction using parameters given.')
             client.close();
         }
     });
+
+program.command('split-state', 'Split a JSON file into multiple states per shard')
+    .option('--file <path>', 'compressed state file to split into multiple files', program.STRING)
+    .action(async (a,o,l) => {
+        const pipeline = chain([
+            fs.createReadStream(o['file']),
+            zlib.createGunzip(),
+            parser(),
+            pick({filter: 'accounts'}),
+            streamObject(),
+          ]);
+        let i = 0;
+        const shards : GethStateDump[] = [];
+        for (let i = 0 ; i < 16; i++) {
+            shards[i] = {
+                root: "",
+                accounts : {}
+            }
+        }
+        for await (const data of pipeline) {
+            const account = data.value;
+            const id = data.key;
+
+            const hashed = hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20));
+            const topNibble = (hashed[0] & 0xF0) >> 4;
+            shards[topNibble].accounts[id] = {
+                balance: account.balance,
+                nonce: account.nonce,
+                codeHash: account.codeHash,
+                root: account.root,
+                code: account.code,
+                storage: account.storage
+            }
+            if (i % 10000 === 0) {
+                console.log(`Imported ${i} accounts`);
+            }
+            i++;
+        }
+        for (let i = 0 ; i < 16; i++) {
+            await fs.promises.writeFile(`shard.${i}.json`, JSON.stringify(shards[i]));
+            console.log(`Wrote shard ${i}`);
+        }
+    })
+
 
 program.command('proof-size', 'Calculate the sizes of proofs using varying parameters.')
     .option('--multiply', 'Multiply by 10 instead of increment', program.BOOLEAN, false)
