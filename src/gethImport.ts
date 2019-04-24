@@ -32,9 +32,10 @@ export async function ImportGethDump(path: string, tree: MerklePatriciaTree<Buff
         const json = JSON.parse(await fs.promises.readFile(path, { encoding: 'utf8'} )) as GethStateDump;
         for (const [id, account] of Object.entries(json.accounts)) {
             let process = true;
+            const hashed = hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20));
             if (shardNumber != -1) {
-                const topNibble = hashAsBuffer(HashType.KECCAK256, Buffer.from(id.padStart(20, '0'), 'hex'))[0];
-                process = shardNumber == topNibble;
+                const topNibble = hashed[0];
+                process = shardNumber === topNibble;
             }
             if (process) {
                 // TODO: currently, this only supports accounts without storage
@@ -47,7 +48,7 @@ export async function ImportGethDump(path: string, tree: MerklePatriciaTree<Buff
                     throw new Error(`Codehash for account ${id} did not match calcuated hash: got ${codeHash.toString(16)}, expected ${account.codeHash}`);
                 }
                 const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), codeHash, EthereumAccount.EMPTY_BUFFER_HASH);
-                tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount);
+                tree.put(hashed, parsedAccount);
             }
         }
     }
@@ -64,9 +65,10 @@ export async function ImportGethDump(path: string, tree: MerklePatriciaTree<Buff
             const id = data.key;
             let process = true;
 
+            const hashed = hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20));
             if (shardNumber != -1) {
-                const topNibble = hashAsBuffer(HashType.KECCAK256, Buffer.from(id.padStart(20, '0'), 'hex'))[0];
-                process = shardNumber == topNibble;
+                const topNibble = hashed[0];
+                process = shardNumber === topNibble;
             }
             if (process) {
                 // TODO: currently, this only supports accounts without storage
@@ -79,7 +81,7 @@ export async function ImportGethDump(path: string, tree: MerklePatriciaTree<Buff
                     throw new Error(`Codehash for account ${id} did not match calcuated hash: got ${codeHash.toString(16)}, expected ${account.codeHash}`);
                 }
                 const parsedAccount = new EthereumAccount(BigInt(account.nonce), BigInt(account.balance), codeHash, EthereumAccount.EMPTY_BUFFER_HASH);
-                tree.put(hashAsBuffer(HashType.KECCAK256, toBufferBE(BigInt(`0x${id}`), 20)), parsedAccount);
+                tree.put(hashed, parsedAccount);
             }
         }
     }
